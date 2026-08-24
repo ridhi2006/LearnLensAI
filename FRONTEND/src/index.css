@@ -1,0 +1,182 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-dark-950: #04070D;
+    --bg-dark-900: #070B14;
+    --bg-dark-800: #0B1120;
+    --bg-dark-700: #111827;
+    --bg-dark-600: #151D2F;
+    --border-subtle: rgba(148, 163, 184, 0.12);
+  }
+
+  body {
+    background-color: #070B14;
+    color: #F8FAFC;
+    font-family: 'Inter', sans-serif;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Poppins', 'Inter', sans-serif;
+  }
+}
+
+/* Custom Sleek Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #070B14;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1E293B;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #6366F1;
+}
+
+/* Glassmorphism, Glows & Animated Background Patterns */
+@layer utilities {
+  .bg-grid-pattern {
+    background-image: radial-gradient(rgba(148, 163, 184, 0.1) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .bg-grid-lines {
+    background-size: 40px 40px;
+    background-image: 
+      linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  }
+
+  .glass-panel {
+    background: rgba(17, 24, 39, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+  }
+
+  .glass-card {
+    background: rgba(17, 24, 39, 0.65);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+  }
+
+  .glass-card-hover {
+    transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .glass-card-hover:hover {
+    transform: translateY(-4px);
+    border-color: rgba(99, 102, 241, 0.45);
+    box-shadow: 0 16px 40px -10px rgba(99, 102, 241, 0.25);
+  }
+
+  .gradient-border {
+    position: relative;
+  }
+
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.6), rgba(139, 92, 246, 0.2), rgba(34, 211, 238, 0.4));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  .gradient-text-hero {
+    background: linear-gradient(135deg, #FFFFFF 0%, #E2E8F0 40%, #A78BFA 70%, #6366F1 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .gradient-text-accent {
+    background: linear-gradient(135deg, #6366F1 0%, #8B5CF6 50%, #22D3EE 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .gradient-text-cyan {
+    background: linear-gradient(135deg, #22D3EE 0%, #6366F1 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .glow-indigo {
+    box-shadow: 0 0 35px -5px rgba(99, 102, 241, 0.4);
+  }
+
+  .glow-violet {
+    box-shadow: 0 0 35px -5px rgba(139, 92, 246, 0.45);
+  }
+
+  .glow-cyan {
+    box-shadow: 0 0 30px -5px rgba(34, 211, 238, 0.4);
+  }
+}
+
+/* React Flow Dark Theme Overrides */
+.react-flow__background {
+  background-color: #070B14 !important;
+}
+
+.react-flow__controls {
+  background: #111827 !important;
+  border: 1px solid rgba(148, 163, 184, 0.15) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6) !important;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background: #111827 !important;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1) !important;
+  color: #CBD5E1 !important;
+  fill: #CBD5E1 !important;
+  transition: all 0.2s ease;
+}
+
+.react-flow__controls-button:hover {
+  background: #1E293B !important;
+  color: #F8FAFC !important;
+  fill: #F8FAFC !important;
+}
+
+.react-flow__edge-path {
+  stroke: rgba(99, 102, 241, 0.5) !important;
+  stroke-width: 2 !important;
+}
+
+.react-flow__edge.animated path {
+  stroke: #8B5CF6 !important;
+  stroke-dasharray: 5;
+  animation: react-flow__edge-animation 1s linear infinite;
+}
+
+.react-flow__attribution {
+  display: none !important;
+}
+
+@keyframes react-flow__edge-animation {
+  from {
+    stroke-dashoffset: 20;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
