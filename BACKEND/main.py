@@ -23,7 +23,7 @@ app = FastAPI(title="LearnLensAI Backend", version="1.0.0")
 class RateLimitException(Exception):
     def __init__(
         self,
-        message: str = "YouTube is temporarily rate-limiting transcript requests. Please wait a little before trying again.",
+        message: str = "YouTube is temporarily rate-limiting transcript requests. Please try again later.",
         code: str = "YOUTUBE_RATE_LIMITED",
         retry_after: int = 30
     ):
@@ -64,6 +64,18 @@ SUPPORTED_LANGUAGES = {
     "ko": "Korean",
     "zh": "Chinese"
 }
+
+def is_rate_limit_exception(exc: Exception) -> bool:
+    if isinstance(exc, (IpBlocked, RequestBlocked)):
+        return True
+    if isinstance(exc, YouTubeRequestFailed):
+        msg = str(exc).lower()
+        if "429" in msg or "too many requests" in msg or "ip" in msg or "block" in msg or "rate limit" in msg or "rate-limit" in msg:
+            return True
+    msg_gen = str(exc).lower()
+    if "429" in msg_gen or "too many requests" in msg_gen or "ipblocked" in msg_gen or "requestblocked" in msg_gen:
+        return True
+    return False
 
 # --- Server-Side In-Memory Cache (Req 6) ---
 class SimpleCache:
@@ -286,6 +298,76 @@ def fetch_youtube_oembed(video_id: str) -> dict:
             detail="Unable to process this video right now."
         )
 
+# --- Shared Single Transcript Discovery Pipeline (Req 4 & Req 15) ---
+def get_cached_transcript_list(video_id: str):
+    cached = languages_cache.get(f"{video_id}:list_and_langs")
+    if cached:
+        return cached
+
+    if cooldown_mgr.is_cooling_down():
+        raise RateLimitException(retry_after=cooldown_mgr.remaining())
+
+    def _fetch():
+        try:
+            api = YouTubeTranscriptApi()
+            transcript_list = api.list(video_id)
+
+            available_langs = []
+            seen_codes = set()
+            for t in transcript_list:
+                c = t.language_code.split('-')[0].lower()
+                n = SUPPORTED_LANGUAGES.get(c, getattr(t, 'language', c.capitalize()))
+                if c not in seen_codes:
+                    seen_codes.add(c)
+                    available_langs.append({
+                        "code": c,
+                        "name": n,
+                        "isGenerated": getattr(t, 'is_generated', False),
+                        "isTranslatable": getattr(t, 'is_translatable', False)
+                    })
+                if getattr(t, 'is_translatable', False):
+                    for trans in getattr(t, 'translation_languages', []):
+                        tc = getattr(trans, 'language_code', '').split('-')[0].lower()
+                        tn = SUPPORTED_LANGUAGES.get(tc, getattr(trans, 'language', tc.capitalize()))
+                        if tc not in seen_codes and tc in SUPPORTED_LANGUAGES:
+                            seen_codes.add(tc)
+                            available_langs.append({
+                                "code": tc,
+                                "name": tn,
+                                "isGenerated": False,
+                                "isTranslatable": False
+                            })
+
+            res = (transcript_list, available_langs)
+            languages_cache.set(f"{video_id}:list_and_langs", res)
+            return res
+
+        except Exception as exc:
+            if is_rate_limit_exception(exc):
+                cooldown_mgr.trigger(30)
+                raise RateLimitException(retry_after=30)
+            if isinstance(exc, (TranscriptsDisabled, NoTranscriptFound)):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="No transcript is available for this video."
+                )
+            if isinstance(exc, (VideoUnavailable, VideoUnplayable)):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="This video is unavailable, private, or restricted."
+                )
+            if isinstance(exc, requests.exceptions.Timeout):
+                raise HTTPException(
+                    status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                    detail="Transcript retrieval timed out. Please try again."
+                )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No transcript is available for this video."
+            )
+
+    return deduplicator.execute(f"transcript_list_{video_id}", _fetch)
+
 def fetch_youtube_transcript(video_id: str, target_lang: str = "en") -> dict:
     target_lang = (target_lang or "en").lower().strip()
     cache_key = f"{video_id}:{target_lang}"
@@ -294,136 +376,100 @@ def fetch_youtube_transcript(video_id: str, target_lang: str = "en") -> dict:
     if cached:
         return cached
 
-    if cooldown_mgr.is_cooling_down():
-        raise RateLimitException(retry_after=cooldown_mgr.remaining())
+    transcript_list, avail_langs = get_cached_transcript_list(video_id)
 
-    def _do_work():
+    formatted_avail_langs = [
+        AvailableLangModel(name=item["name"], code=item["code"])
+        for item in avail_langs
+    ]
+
+    selected_obj = None
+    used_code = target_lang
+    used_name = SUPPORTED_LANGUAGES.get(target_lang, target_lang.capitalize())
+
+    if target_lang == "auto":
         try:
-            api = YouTubeTranscriptApi()
-            transcript_list = api.list(video_id)
+            selected_obj = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+        except Exception:
+            available = list(transcript_list)
+            if not available:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="No transcript is available for this video."
+                )
+            selected_obj = available[0]
+        used_code = getattr(selected_obj, 'language_code', 'en').split('-')[0].lower()
+        used_name = SUPPORTED_LANGUAGES.get(used_code, getattr(selected_obj, 'language', 'English'))
+    else:
+        # 1. Direct language match
+        for t in transcript_list:
+            if t.language_code.split('-')[0].lower() == target_lang:
+                selected_obj = t
+                used_code = target_lang
+                used_name = SUPPORTED_LANGUAGES.get(target_lang, getattr(t, 'language', 'English'))
+                break
 
-            avail_langs = []
-            seen_codes = set()
+        # 2. Translation fallback
+        if not selected_obj:
             for t in transcript_list:
-                c = t.language_code.split('-')[0].lower()
-                n = SUPPORTED_LANGUAGES.get(c, getattr(t, 'language', c.capitalize()))
-                if c not in seen_codes:
-                    seen_codes.add(c)
-                    avail_langs.append({"name": n, "code": c})
                 if getattr(t, 'is_translatable', False):
                     for trans in getattr(t, 'translation_languages', []):
                         tc = getattr(trans, 'language_code', '').split('-')[0].lower()
-                        tn = SUPPORTED_LANGUAGES.get(tc, getattr(trans, 'language', tc.capitalize()))
-                        if tc not in seen_codes and tc in SUPPORTED_LANGUAGES:
-                            seen_codes.add(tc)
-                            avail_langs.append({"name": tn, "code": tc})
-
-            selected_obj = None
-            used_code = target_lang
-            used_name = SUPPORTED_LANGUAGES.get(target_lang, target_lang.capitalize())
-
-            if target_lang == "auto":
-                try:
-                    selected_obj = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
-                except Exception:
-                    available = list(transcript_list)
-                    if not available:
-                        raise HTTPException(
-                            status_code=status.HTTP_404_NOT_FOUND,
-                            detail="No transcript is available for this video."
-                        )
-                    selected_obj = available[0]
-                used_code = getattr(selected_obj, 'language_code', 'en').split('-')[0].lower()
-                used_name = SUPPORTED_LANGUAGES.get(used_code, getattr(selected_obj, 'language', 'English'))
-            else:
-                # 1. Direct match
-                for t in transcript_list:
-                    if t.language_code.split('-')[0].lower() == target_lang:
-                        selected_obj = t
-                        used_code = target_lang
-                        used_name = SUPPORTED_LANGUAGES.get(target_lang, getattr(t, 'language', 'English'))
-                        break
-
-                # 2. Translation fallback
-                if not selected_obj:
-                    for t in transcript_list:
-                        if getattr(t, 'is_translatable', False):
-                            for trans in getattr(t, 'translation_languages', []):
-                                tc = getattr(trans, 'language_code', '').split('-')[0].lower()
-                                if tc == target_lang:
-                                    actual_code = getattr(trans, 'language_code', target_lang)
-                                    selected_obj = t.translate(actual_code)
-                                    used_code = target_lang
-                                    used_name = SUPPORTED_LANGUAGES.get(target_lang, getattr(trans, 'language', target_lang.capitalize()))
-                                    break
-                        if selected_obj:
+                        if tc == target_lang:
+                            actual_code = getattr(trans, 'language_code', target_lang)
+                            selected_obj = t.translate(actual_code)
+                            used_code = target_lang
+                            used_name = SUPPORTED_LANGUAGES.get(target_lang, getattr(trans, 'language', target_lang.capitalize()))
                             break
+                if selected_obj:
+                    break
 
-                if not selected_obj:
-                    lang_display = SUPPORTED_LANGUAGES.get(target_lang, target_lang.upper())
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"{lang_display} transcript is not available for this video. Please choose another available language."
-                    )
+        if not selected_obj:
+            lang_display = SUPPORTED_LANGUAGES.get(target_lang, target_lang.upper())
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"{lang_display} transcript is not available for this video. Please choose another available language."
+            )
 
-            fetched_snippets = selected_obj.fetch()
-
-            segments = []
-            full_text_parts = []
-            for item in fetched_snippets:
-                cleaned_text = item.text.strip()
-                if cleaned_text:
-                    segments.append({
-                        "text": cleaned_text,
-                        "start": round(item.start, 2),
-                        "duration": round(item.duration, 2)
-                    })
-                    full_text_parts.append(cleaned_text)
-
-            full_text = " ".join(full_text_parts)
-
-            result = {
-                "videoId": video_id,
-                "language": used_name,
-                "languageCode": used_code,
-                "segments": segments,
-                "fullText": full_text,
-                "availableLanguages": avail_langs
-            }
-
-            transcript_cache.set(cache_key, result)
-            if used_code != target_lang:
-                transcript_cache.set(f"{video_id}:{used_code}", result)
-
-            return result
-
-        except (IpBlocked, RequestBlocked):
+    try:
+        fetched_snippets = selected_obj.fetch()
+    except Exception as exc:
+        if is_rate_limit_exception(exc):
             cooldown_mgr.trigger(30)
             raise RateLimitException(retry_after=30)
-        except HTTPException:
-            raise
-        except (TranscriptsDisabled, NoTranscriptFound):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No transcript is available for this video."
-            )
-        except (VideoUnavailable, VideoUnplayable):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="This video is unavailable, private, or restricted."
-            )
-        except (YouTubeRequestFailed, requests.exceptions.Timeout):
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Transcript retrieval timed out. Please try again."
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No transcript is available for this video."
-            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No transcript is available for this video."
+        )
 
-    return deduplicator.execute(f"transcript_{cache_key}", _do_work)
+    segments = []
+    full_text_parts = []
+    for item in fetched_snippets:
+        cleaned_text = item.text.strip()
+        if cleaned_text:
+            segments.append({
+                "text": cleaned_text,
+                "start": round(item.start, 2),
+                "duration": round(item.duration, 2)
+            })
+            full_text_parts.append(cleaned_text)
+
+    full_text = " ".join(full_text_parts)
+
+    result = {
+        "videoId": video_id,
+        "language": used_name,
+        "languageCode": used_code,
+        "segments": segments,
+        "fullText": full_text,
+        "availableLanguages": formatted_avail_langs
+    }
+
+    transcript_cache.set(cache_key, result)
+    if used_code != target_lang:
+        transcript_cache.set(f"{video_id}:{used_code}", result)
+
+    return result
 
 @app.post("/api/v1/video-info", response_model=VideoInfoResponse)
 def get_video_info(req: VideoInfoRequest):
@@ -446,52 +492,12 @@ def get_transcript_languages_discovery(video_id: str):
             detail="Please enter a valid YouTube URL or 11-character video ID."
         )
 
-    cached = languages_cache.get(f"{vid}:discovery")
-    if cached:
-        return cached
-
-    if cooldown_mgr.is_cooling_down():
-        raise RateLimitException(retry_after=cooldown_mgr.remaining())
-
-    def _fetch():
-        try:
-            api = YouTubeTranscriptApi()
-            transcript_list = api.list(vid)
-            langs = []
-            seen = set()
-            for t in transcript_list:
-                c = t.language_code.split('-')[0].lower()
-                name = SUPPORTED_LANGUAGES.get(c, getattr(t, 'language', c.capitalize()))
-                if c not in seen:
-                    seen.add(c)
-                    langs.append({
-                        "code": c,
-                        "name": name,
-                        "isGenerated": getattr(t, 'is_generated', False)
-                    })
-            res = {"videoId": vid, "languages": langs}
-            languages_cache.set(f"{vid}:discovery", res)
-            return res
-        except (IpBlocked, RequestBlocked):
-            cooldown_mgr.trigger(30)
-            raise RateLimitException(retry_after=30)
-        except (TranscriptsDisabled, NoTranscriptFound):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No transcript is available for this video."
-            )
-        except (VideoUnavailable, VideoUnplayable):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="This video is unavailable, private, or restricted."
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No transcript is available for this video."
-            )
-
-    return deduplicator.execute(f"langs_disc_{vid}", _fetch)
+    transcript_list, avail_langs = get_cached_transcript_list(vid)
+    lang_items = [
+        LanguageItem(code=item["code"], name=item["name"], isGenerated=item.get("isGenerated", False))
+        for item in avail_langs
+    ]
+    return LanguageDiscoveryResponse(videoId=vid, languages=lang_items)
 
 @app.get("/api/v1/transcript/languages", response_model=LanguagesResponse)
 def get_transcript_languages(video_id: str):
@@ -502,65 +508,16 @@ def get_transcript_languages(video_id: str):
             detail="Please enter a valid YouTube URL or 11-character video ID."
         )
 
-    cached = languages_cache.get(f"{vid}:full")
-    if cached:
-        return cached
-
-    if cooldown_mgr.is_cooling_down():
-        raise RateLimitException(retry_after=cooldown_mgr.remaining())
-
-    def _fetch_all():
-        try:
-            api = YouTubeTranscriptApi()
-            transcript_list = api.list(vid)
-            
-            available_codes = set()
-            for t in transcript_list:
-                code = t.language_code.split('-')[0].lower()
-                if code in SUPPORTED_LANGUAGES:
-                    available_codes.add(code)
-                if getattr(t, 'is_translatable', False):
-                    for trans in getattr(t, 'translation_languages', []):
-                        t_code = getattr(trans, 'language_code', '').split('-')[0].lower()
-                        if t_code in SUPPORTED_LANGUAGES:
-                            available_codes.add(t_code)
-                            
-            lang_list = []
-            for code, name in SUPPORTED_LANGUAGES.items():
-                lang_list.append(LanguageOption(
-                    code=code,
-                    name=name,
-                    available=(code in available_codes)
-                ))
-                
-            res = LanguagesResponse(languages=lang_list)
-            languages_cache.set(f"{vid}:full", res)
-            return res
-        except (IpBlocked, RequestBlocked):
-            cooldown_mgr.trigger(30)
-            raise RateLimitException(retry_after=30)
-        except (TranscriptsDisabled, NoTranscriptFound):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No transcript is available for this video."
-            )
-        except (VideoUnavailable, VideoUnplayable):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="This video is unavailable, private, or restricted."
-            )
-        except (YouTubeRequestFailed, requests.exceptions.Timeout):
-            raise HTTPException(
-                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-                detail="Transcript retrieval timed out. Please try again."
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="No transcript is available for this video."
-            )
-
-    return deduplicator.execute(f"langs_full_{vid}", _fetch_all)
+    transcript_list, avail_langs = get_cached_transcript_list(vid)
+    available_codes = {item["code"] for item in avail_langs}
+    lang_list = []
+    for code, name in SUPPORTED_LANGUAGES.items():
+        lang_list.append(LanguageOption(
+            code=code,
+            name=name,
+            available=(code in available_codes)
+        ))
+    return LanguagesResponse(languages=lang_list)
 
 @app.post("/api/v1/transcript", response_model=TranscriptResponse)
 def get_transcript(req: TranscriptRequest):

@@ -126,10 +126,19 @@ export const AnalyzeVideo = () => {
     if (err?.response?.status === 429 || detailObj?.code === 'YOUTUBE_RATE_LIMITED' || err?.response?.data?.code === 'YOUTUBE_RATE_LIMITED') {
       const retryAfter = detailObj?.retryAfter || err?.response?.data?.retryAfter || 30;
       setCooldownSeconds(retryAfter);
-      return `Transcript service is temporarily rate-limited by YouTube. Please wait ${retryAfter} seconds before trying again.`;
+      return detailObj?.message || `YouTube is temporarily rate-limiting transcript requests. Please try again later.`;
     }
-    if (err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
-      return 'Transcript retrieval timed out. Please try again.';
+    if (err?.response?.status === 400) {
+      return detailObj?.message || (typeof detailObj === 'string' ? detailObj : 'Please enter a valid YouTube URL.');
+    }
+    if (err?.response?.status === 404) {
+      return detailObj?.message || (typeof detailObj === 'string' ? detailObj : 'No transcript is available for this video.');
+    }
+    if (err?.response?.status === 502) {
+      return 'Unable to reach YouTube.';
+    }
+    if (err?.response?.status === 504 || err?.response?.status === 408 || err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
+      return 'Transcript retrieval timed out.';
     }
     if (detailObj) {
       if (typeof detailObj === 'string') {
@@ -138,12 +147,6 @@ export const AnalyzeVideo = () => {
       if (detailObj?.message) {
         return detailObj.message;
       }
-    }
-    if (err?.response?.status === 504 || err?.response?.status === 408) {
-      return 'Transcript retrieval timed out. Please try again.';
-    }
-    if (err?.response?.status === 502) {
-      return 'Unable to reach YouTube services. Please check your network connection.';
     }
     if (!err?.response && (err?.message?.includes('Network Error') || err?.code === 'ERR_NETWORK')) {
       return 'Unable to connect to LearnLens server. Please make sure the backend server is running.';

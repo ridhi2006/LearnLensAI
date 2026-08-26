@@ -324,32 +324,60 @@ class TestTranscriptLanguages(unittest.TestCase):
         self.assertEqual(res.headers.get("retry-after"), str(detail["retryAfter"]))
 
     @patch('main.YouTubeTranscriptApi')
-    def test_server_side_caching(self, mock_api_cls):
-        from main import transcript_cache, cooldown_mgr
+    def test_youtube_request_failed_429(self, mock_api_cls):
+        from youtube_transcript_api import YouTubeRequestFailed
+        from main import cooldown_mgr
+        cooldown_mgr.cooldown_until = 0
+
+        mock_api_inst = MagicMock()
+        mock_api_inst.list.side_effect = YouTubeRequestFailed("MFhxShGxHWc", "YouTube returned HTTP status 429: Too Many Requests")
+        mock_api_cls.return_value = mock_api_inst
+
+        res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.json()["detail"]["code"], "YOUTUBE_RATE_LIMITED")
+
+    @patch('main.YouTubeTranscriptApi')
+    def test_ip_blocked_and_request_blocked(self, mock_api_cls):
+        from youtube_transcript_api import IpBlocked
+        from main import cooldown_mgr
+        cooldown_mgr.cooldown_until = 0
+
+        mock_api_inst = MagicMock()
+        mock_api_inst.list.side_effect = IpBlocked("MFhxShGxHWc")
+        mock_api_cls.return_value = mock_api_inst
+
+        res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.json()["detail"]["code"], "YOUTUBE_RATE_LIMITED")
+
+    @patch('main.YouTubeTranscriptApi')
+    def test_single_discovery_call_verification(self, mock_api_cls):
+        from main import transcript_cache, languages_cache, cooldown_mgr
         cooldown_mgr.cooldown_until = 0
         transcript_cache.clear()
+        languages_cache.clear()
 
         mock_api_inst = MagicMock()
         mock_t = MagicMock()
         mock_t.language_code = 'en'
         mock_snippet = MagicMock()
-        mock_snippet.text = "Cached text"
+        mock_snippet.text = "Single Call Text"
         mock_snippet.start = 0.0
         mock_snippet.duration = 1.0
         mock_t.fetch.return_value = [mock_snippet]
         mock_api_inst.list.return_value = [mock_t]
         mock_api_cls.return_value = mock_api_inst
 
-        # First call -> hits mock API
-        res1 = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
-        self.assertEqual(res1.status_code, 200)
+        # 1. Discovery call
+        res_disc = client.get("/api/v1/transcript-languages/MFhxShGxHWc")
+        self.assertEqual(res_disc.status_code, 200)
         self.assertEqual(mock_api_inst.list.call_count, 1)
 
-        # Second call -> uses cache, call count remains 1
-        res2 = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
-        self.assertEqual(res2.status_code, 200)
+        # 2. Transcript call -> uses cached discovery list! 0 additional list() calls!
+        res_trans = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
+        self.assertEqual(res_trans.status_code, 200)
         self.assertEqual(mock_api_inst.list.call_count, 1)
-        self.assertEqual(res2.json()["fullText"], "Cached text")
 
 if __name__ == '__main__':
     unittest.main()
