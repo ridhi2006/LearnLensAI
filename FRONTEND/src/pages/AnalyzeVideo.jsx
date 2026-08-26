@@ -555,89 +555,63 @@ export const AnalyzeVideo = () => {
                         <Badge variant="indigo" size="sm">
                           {resultData.transcript?.languageName || 'English'}
                         </Badge>
-                      </h4>
+                  </h4>
                       <p className="text-xs text-text-muted">
                         Transcript Language: {resultData.transcript?.languageName || 'English'} • Preserved timestamps `[start]` & `duration`
                       </p>
                     </div>
                   </div>
 
-                  {/* View Switcher & Language Change */}
-                  <div className="flex flex-wrap items-center gap-3">
-                    <div className="flex items-center gap-1.5 bg-dark-900 px-2.5 py-1 rounded-xl border border-slate-800 text-xs">
-                      <Globe className="w-3.5 h-3.5 text-brand-indigo shrink-0" />
-                      <select
-                        value={selectedLanguage}
-                        onChange={(e) => handleFetchLanguage(e.target.value)}
-                        disabled={isAnalyzing}
-                        className="bg-transparent text-xs font-semibold text-brand-lightViolet outline-none cursor-pointer disabled:opacity-50"
-                      >
-                        <option value="auto">Auto Detect</option>
-                        {availableLanguages.length > 0 ? (
-                          availableLanguages.map((l) => (
-                            <option key={l.code} value={l.code}>
-                              {l.name}
-                            </option>
-                          ))
-                        ) : (
-                          Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => (
-                            code !== 'auto' && (
-                              <option key={code} value={code}>
-                                {name}
-                              </option>
-                            )
-                          ))
-                        )}
-                      </select>
-                    </div>
-
-                    <div className="flex items-center bg-dark-900 p-1 rounded-xl border border-slate-800">
-                      <button
-                        onClick={() => setActiveViewTab('segments')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                          activeViewTab === 'segments'
-                            ? 'bg-brand-indigo text-white shadow-md'
-                            : 'text-text-muted hover:text-white'
-                        }`}
-                      >
-                        Timestamped Segments ({resultData.transcript.segments.length})
-                      </button>
-                      <button
-                        onClick={() => setActiveViewTab('fullText')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                          activeViewTab === 'fullText'
-                            ? 'bg-brand-indigo text-white shadow-md'
-                            : 'text-text-muted hover:text-white'
-                        }`}
-                      >
-                        Full Text
-                      </button>
-                    </div>
+                  {/* View Switcher: Segments vs Full Text */}
+                  <div className="flex items-center bg-dark-900 p-1 rounded-xl border border-slate-800">
+                    <button
+                      onClick={() => setActiveViewTab('segments')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        activeViewTab === 'segments'
+                          ? 'bg-brand-indigo text-white shadow-md'
+                          : 'text-text-muted hover:text-white'
+                      }`}
+                    >
+                      Timestamped Segments
+                    </button>
+                    <button
+                      onClick={() => setActiveViewTab('fullText')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        activeViewTab === 'fullText'
+                          ? 'bg-brand-indigo text-white shadow-md'
+                          : 'text-text-muted hover:text-white'
+                      }`}
+                    >
+                      Full Text
+                    </button>
                   </div>
                 </div>
 
-                {activeViewTab === 'segments' ? (
-                  <div className="space-y-3">
-                    {/* Search input */}
-                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-dark-900 border border-slate-800 focus-within:border-brand-indigo transition-colors">
-                      <Search className="w-4 h-4 text-text-muted shrink-0" />
-                      <input
-                        type="text"
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        placeholder="Search within transcript segments..."
-                        className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
-                      />
-                    </div>
+                {/* Search / Filter Bar for Timestamped Segments */}
+                {activeViewTab === 'segments' && (
+                  <div className="relative">
+                    <Search className="w-4 h-4 text-text-muted absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      placeholder="Search timestamped transcript segments..."
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      className="w-full bg-dark-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-text-muted outline-none focus:border-brand-indigo/50 transition-all"
+                    />
+                  </div>
+                )}
 
-                    <div className="max-h-96 overflow-y-auto space-y-2 pr-2 scrollbar-thin scrollbar-thumb-slate-700">
-                      {filteredSegments.length > 0 ? (
+                {/* Segments View vs Full Text View */}
+                {activeViewTab === 'segments' ? (
+                  <div className="max-h-96 overflow-y-auto pr-1">
+                    <div className="space-y-2">
+                      {filteredSegments && filteredSegments.length > 0 ? (
                         filteredSegments.map((seg, idx) => (
                           <div
                             key={idx}
-                            className="p-3 rounded-xl bg-dark-900/80 border border-slate-800/80 hover:border-slate-700 flex items-start gap-3 transition-colors text-xs"
+                            className="p-3 rounded-xl bg-dark-900/90 border border-slate-800/80 hover:border-brand-indigo/40 transition-all flex items-start gap-3 text-xs"
                           >
-                            <span className="px-2 py-1 rounded bg-brand-indigo/15 text-brand-lightViolet border border-brand-indigo/30 font-mono font-bold shrink-0">
+                            <span className="px-2 py-1 rounded-lg bg-brand-indigo/10 border border-brand-indigo/20 text-brand-lightViolet font-mono font-bold shrink-0">
                               {formatTimestamp(seg.start)}
                             </span>
                             <div className="flex-1 text-text-secondary leading-relaxed pt-0.5">
@@ -664,35 +638,9 @@ export const AnalyzeVideo = () => {
             ) : (
               <Card padding="lg" className="border-amber-500/30 bg-amber-500/5 text-amber-300 space-y-3 text-center">
                 <p className="text-sm font-semibold">
-                  Transcript could not be loaded for the requested language.
+                  English transcript could not be loaded for this video.
                 </p>
-                <div className="flex items-center justify-center gap-3 pt-1">
-                  <div className="flex items-center gap-1.5 bg-dark-900 px-3 py-1.5 rounded-xl border border-amber-500/40 text-xs">
-                    <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                    <select
-                      value={selectedLanguage}
-                      onChange={(e) => setSelectedLanguage(e.target.value)}
-                      disabled={isAnalyzing}
-                      className="bg-transparent text-xs font-semibold text-amber-300 outline-none cursor-pointer disabled:opacity-50"
-                    >
-                      <option value="auto">Auto Detect</option>
-                      {availableLanguages.length > 0 ? (
-                        availableLanguages.map((l) => (
-                          <option key={l.code} value={l.code}>
-                            {l.name}
-                          </option>
-                        ))
-                      ) : (
-                        Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => (
-                          code !== 'auto' && (
-                            <option key={code} value={code}>
-                              {name}
-                            </option>
-                          )
-                        ))
-                      )}
-                    </select>
-                  </div>
+                <div className="flex items-center justify-center pt-1">
                   <Button
                     variant="outline"
                     size="sm"
@@ -701,7 +649,7 @@ export const AnalyzeVideo = () => {
                     leftIcon={<RefreshCw className={`w-4 h-4 ${isAnalyzing ? 'animate-spin' : ''}`} />}
                     className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
                   >
-                    {cooldownSeconds > 0 ? `Try again in ${cooldownSeconds}s` : 'Retrieve Transcript'}
+                    {cooldownSeconds > 0 ? `Try again in ${cooldownSeconds}s` : 'Retry Transcript'}
                   </Button>
                 </div>
               </Card>
@@ -712,4 +660,3 @@ export const AnalyzeVideo = () => {
     </AppLayout>
   );
 };
-
