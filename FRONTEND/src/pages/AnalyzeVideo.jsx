@@ -140,6 +140,7 @@ export const AnalyzeVideo = () => {
     setResultData(null);
 
     let videoInfo = null;
+    let activeLang = selectedLanguage;
 
     try {
       // Step 1: Real Video Information
@@ -157,17 +158,24 @@ export const AnalyzeVideo = () => {
       try {
         const langRes = await videoService.getAvailableLanguages(videoInfo.videoId);
         if (langRes?.languages) {
-          setAvailableLanguages(langRes.languages);
+          const avail = langRes.languages.filter((l) => l.available);
+          setAvailableLanguages(avail);
+
+          // Requirement 7: Default to English ONLY if English is actually available!
+          if (selectedLanguage === 'en' && avail.length > 0 && !avail.some((l) => l.code === 'en')) {
+            activeLang = avail[0].code;
+            setSelectedLanguage(activeLang);
+          }
         }
       } catch (lErr) {
         console.warn('Languages fetch warning:', lErr);
       }
 
       // Step 2: Real Transcript Retrieval with selected language
-      const targetLangName = SUPPORTED_LANGUAGES[selectedLanguage] || 'transcript';
+      const targetLangName = SUPPORTED_LANGUAGES[activeLang] || activeLang || 'transcript';
       setLoadingStep(`Retrieving ${targetLangName} transcript & timestamps from YouTube...`);
       try {
-        const transcriptData = await videoService.getTranscript(url, selectedLanguage);
+        const transcriptData = await videoService.getTranscript(url, activeLang);
         const completeOutput = {
           video: videoInfo,
           transcript: transcriptData
@@ -176,6 +184,10 @@ export const AnalyzeVideo = () => {
         setActiveVideoId(videoInfo.videoId);
         setResultData(completeOutput);
 
+        if (transcriptData.language) {
+          setSelectedLanguage(transcriptData.language);
+        }
+
         showToast({
           title: 'Analysis Complete!',
           message: `Successfully loaded ${transcriptData.languageName || 'transcript'} for "${videoInfo.title}".`,
@@ -183,6 +195,7 @@ export const AnalyzeVideo = () => {
         });
       } catch (transcriptErr) {
         console.error('Transcript Retrieval Error:', transcriptErr);
+        setResultData({ video: videoInfo, transcript: null });
         const message = parseErrorMessage(transcriptErr);
         setErrorMsg(message);
         showToast({ title: 'Transcript Unavailable', message, type: 'warning' });
@@ -200,10 +213,14 @@ export const AnalyzeVideo = () => {
   const handleFetchLanguage = async (newLang) => {
     if (!resultData?.video) return;
     setSelectedLanguage(newLang);
+
+    // CRITICAL BUG FIX: Clear transcript immediately when changing language so stale transcript is NEVER displayed underneath!
+    setResultData((prev) => (prev ? { video: prev.video, transcript: null } : null));
+
     setIsAnalyzing(true);
     setErrorMsg(null);
     const targetLangName = SUPPORTED_LANGUAGES[newLang] || newLang;
-    setLoadingStep(`Fetching ${targetLangName} transcript from YouTube...`);
+    setLoadingStep(`Retrieving ${targetLangName} transcript...`);
 
     try {
       const transcriptData = await videoService.getTranscript(resultData.video.videoId, newLang);
@@ -215,6 +232,10 @@ export const AnalyzeVideo = () => {
       setActiveVideoId(resultData.video.videoId);
       setResultData(completeOutput);
 
+      if (transcriptData.language) {
+        setSelectedLanguage(transcriptData.language);
+      }
+
       showToast({
         title: 'Language Updated!',
         message: `Loaded ${transcriptData.languageName} transcript.`,
@@ -222,6 +243,7 @@ export const AnalyzeVideo = () => {
       });
     } catch (err) {
       console.error('Language Fetch Error:', err);
+      setResultData((prev) => (prev ? { video: prev.video, transcript: null } : null));
       const message = parseErrorMessage(err);
       setErrorMsg(message);
       showToast({ title: 'Transcript Language Error', message, type: 'error' });
@@ -299,7 +321,8 @@ export const AnalyzeVideo = () => {
                 <select
                   value={selectedLanguage}
                   onChange={(e) => setSelectedLanguage(e.target.value)}
-                  className="px-3 py-1.5 rounded-xl bg-dark-900 border border-slate-700 text-xs font-medium text-text-primary focus:border-brand-indigo outline-none cursor-pointer"
+                  disabled={isAnalyzing}
+                  className="px-3 py-1.5 rounded-xl bg-dark-900 border border-slate-700 text-xs font-medium text-text-primary focus:border-brand-indigo outline-none cursor-pointer disabled:opacity-50"
                 >
                   <option value="en">English (Default)</option>
                   <option value="hi">Hindi</option>
@@ -514,18 +537,25 @@ export const AnalyzeVideo = () => {
                       <select
                         value={selectedLanguage}
                         onChange={(e) => handleFetchLanguage(e.target.value)}
-                        className="bg-transparent text-xs font-semibold text-brand-lightViolet outline-none cursor-pointer"
+                        disabled={isAnalyzing}
+                        className="bg-transparent text-xs font-semibold text-brand-lightViolet outline-none cursor-pointer disabled:opacity-50"
                       >
-                        <option value="en">English</option>
-                        <option value="hi">Hindi</option>
-                        <option value="es">Spanish</option>
-                        <option value="fr">French</option>
-                        <option value="de">German</option>
-                        <option value="pt">Portuguese</option>
-                        <option value="ja">Japanese</option>
-                        <option value="ko">Korean</option>
-                        <option value="zh">Chinese</option>
                         <option value="auto">Auto Detect</option>
+                        {availableLanguages.length > 0 ? (
+                          availableLanguages.map((l) => (
+                            <option key={l.code} value={l.code}>
+                              {l.name}
+                            </option>
+                          ))
+                        ) : (
+                          Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => (
+                            code !== 'auto' && (
+                              <option key={code} value={code}>
+                                {name}
+                              </option>
+                            )
+                          ))
+                        )}
                       </select>
                     </div>
 
@@ -602,7 +632,7 @@ export const AnalyzeVideo = () => {
             ) : (
               <Card padding="lg" className="border-amber-500/30 bg-amber-500/5 text-amber-300 space-y-3 text-center">
                 <p className="text-sm font-semibold">
-                  Transcript could not be loaded automatically.
+                  Transcript could not be loaded for the requested language.
                 </p>
                 <div className="flex items-center justify-center gap-3 pt-1">
                   <div className="flex items-center gap-1.5 bg-dark-900 px-3 py-1.5 rounded-xl border border-amber-500/40 text-xs">
@@ -610,24 +640,32 @@ export const AnalyzeVideo = () => {
                     <select
                       value={selectedLanguage}
                       onChange={(e) => setSelectedLanguage(e.target.value)}
-                      className="bg-transparent text-xs font-semibold text-amber-300 outline-none cursor-pointer"
+                      disabled={isAnalyzing}
+                      className="bg-transparent text-xs font-semibold text-amber-300 outline-none cursor-pointer disabled:opacity-50"
                     >
-                      <option value="en">English</option>
-                      <option value="hi">Hindi</option>
-                      <option value="es">Spanish</option>
-                      <option value="fr">French</option>
-                      <option value="de">German</option>
-                      <option value="pt">Portuguese</option>
-                      <option value="ja">Japanese</option>
-                      <option value="ko">Korean</option>
-                      <option value="zh">Chinese</option>
                       <option value="auto">Auto Detect</option>
+                      {availableLanguages.length > 0 ? (
+                        availableLanguages.map((l) => (
+                          <option key={l.code} value={l.code}>
+                            {l.name}
+                          </option>
+                        ))
+                      ) : (
+                        Object.entries(SUPPORTED_LANGUAGES).map(([code, name]) => (
+                          code !== 'auto' && (
+                            <option key={code} value={code}>
+                              {name}
+                            </option>
+                          )
+                        ))
+                      )}
                     </select>
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={handleRetryTranscript}
+                    disabled={isAnalyzing}
                     leftIcon={<RefreshCw className="w-4 h-4" />}
                     className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
                   >
