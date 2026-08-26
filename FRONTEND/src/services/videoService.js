@@ -21,14 +21,23 @@ export const videoService = {
     return MOCK_VIDEOS[videoId] || MOCK_VIDEOS[DEFAULT_VIDEO_ID];
   },
 
+  // Fetch available transcript languages from backend
+  async getAvailableLanguages(videoId) {
+    if (!videoId) return { languages: [] };
+    return await api.get('/transcript/languages', {
+      params: { video_id: videoId },
+      timeout: 20000
+    });
+  },
+
   // Fetch real YouTube transcript from backend
-  async getTranscript(urlOrId = DEFAULT_VIDEO_ID) {
-    if (!urlOrId) return { videoId: '', language: 'en', segments: [], fullText: '' };
+  async getTranscript(urlOrId = DEFAULT_VIDEO_ID, language = 'en') {
+    if (!urlOrId) return { videoId: '', language: 'en', languageName: 'English', segments: [], fullText: '' };
     const url = typeof urlOrId === 'string' && urlOrId.includes('/')
       ? urlOrId
       : `https://www.youtube.com/watch?v=${urlOrId}`;
 
-    return await api.post('/transcript', { url }, { timeout: 90000 });
+    return await api.post('/transcript', { url, language }, { timeout: 90000 });
   },
 
   // Get timestamp Q&A data

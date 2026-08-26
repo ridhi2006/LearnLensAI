@@ -15,7 +15,8 @@ import {
   AlertCircle,
   RefreshCw,
   Video,
-  ListFilter
+  ListFilter,
+  Globe
 } from 'lucide-react';
 import { YoutubeIcon } from '../components/common/BrandIcons';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -27,12 +28,27 @@ import { useToast } from '../context/ToastContext';
 import { extractVideoId } from '../utils/youtube';
 import { videoService } from '../services/videoService';
 
+const SUPPORTED_LANGUAGES = {
+  en: 'English',
+  hi: 'Hindi',
+  es: 'Spanish',
+  fr: 'French',
+  de: 'German',
+  pt: 'Portuguese',
+  ja: 'Japanese',
+  ko: 'Korean',
+  zh: 'Chinese',
+  auto: 'Auto Detect'
+};
+
 export const AnalyzeVideo = () => {
   const [searchParams] = useSearchParams();
   const initialUrl = searchParams.get('url') || 'https://www.youtube.com/watch?v=MFhxShGxHWc';
   
   const [url, setUrl] = useState(initialUrl);
   const [selectedMode, setSelectedMode] = useState('College');
+  const [selectedLanguage, setSelectedLanguage] = useState('en');
+  const [availableLanguages, setAvailableLanguages] = useState([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [loadingStep, setLoadingStep] = useState('Validating YouTube URL...');
   const [errorMsg, setErrorMsg] = useState(null);
@@ -90,13 +106,13 @@ export const AnalyzeVideo = () => {
 
   const parseErrorMessage = (err) => {
     if (err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
-      return 'Request timed out while contacting YouTube. Please try again or check your network connection.';
+      return 'Transcript retrieval timed out. Please try again.';
     }
     if (err?.response?.data?.detail) {
       return err.response.data.detail;
     }
     if (err?.response?.status === 504 || err?.response?.status === 408) {
-      return 'YouTube request timed out while fetching video data. Please try again.';
+      return 'Transcript retrieval timed out. Please try again.';
     }
     if (err?.response?.status === 502) {
       return 'Unable to reach YouTube services. Please check your network connection.';
@@ -137,10 +153,21 @@ export const AnalyzeVideo = () => {
       };
       setResultData(partialOutput);
 
-      // Step 2: Real Transcript Retrieval
-      setLoadingStep('Retrieving full transcript & timestamps from YouTube (longer videos may take a few extra seconds)...');
+      // Fetch available languages
       try {
-        const transcriptData = await videoService.getTranscript(url);
+        const langRes = await videoService.getAvailableLanguages(videoInfo.videoId);
+        if (langRes?.languages) {
+          setAvailableLanguages(langRes.languages);
+        }
+      } catch (lErr) {
+        console.warn('Languages fetch warning:', lErr);
+      }
+
+      // Step 2: Real Transcript Retrieval with selected language
+      const targetLangName = SUPPORTED_LANGUAGES[selectedLanguage] || 'transcript';
+      setLoadingStep(`Retrieving ${targetLangName} transcript & timestamps from YouTube...`);
+      try {
+        const transcriptData = await videoService.getTranscript(url, selectedLanguage);
         const completeOutput = {
           video: videoInfo,
           transcript: transcriptData
@@ -151,13 +178,13 @@ export const AnalyzeVideo = () => {
 
         showToast({
           title: 'Analysis Complete!',
-          message: `Successfully loaded metadata & transcript for "${videoInfo.title}".`,
+          message: `Successfully loaded ${transcriptData.languageName || 'transcript'} for "${videoInfo.title}".`,
           type: 'success'
         });
       } catch (transcriptErr) {
         console.error('Transcript Retrieval Error:', transcriptErr);
         const message = parseErrorMessage(transcriptErr);
-        setErrorMsg(`Video metadata loaded successfully, but transcript retrieval failed: ${message}`);
+        setErrorMsg(message);
         showToast({ title: 'Transcript Unavailable', message, type: 'warning' });
       }
     } catch (videoErr) {
@@ -170,14 +197,16 @@ export const AnalyzeVideo = () => {
     }
   };
 
-  const handleRetryTranscript = async () => {
+  const handleFetchLanguage = async (newLang) => {
     if (!resultData?.video) return;
+    setSelectedLanguage(newLang);
     setIsAnalyzing(true);
     setErrorMsg(null);
-    setLoadingStep('Retrying transcript retrieval from YouTube...');
+    const targetLangName = SUPPORTED_LANGUAGES[newLang] || newLang;
+    setLoadingStep(`Fetching ${targetLangName} transcript from YouTube...`);
 
     try {
-      const transcriptData = await videoService.getTranscript(resultData.video.videoId);
+      const transcriptData = await videoService.getTranscript(resultData.video.videoId, newLang);
       const completeOutput = {
         video: resultData.video,
         transcript: transcriptData
@@ -187,18 +216,23 @@ export const AnalyzeVideo = () => {
       setResultData(completeOutput);
 
       showToast({
-        title: 'Transcript Retrieved!',
-        message: `Loaded transcript for "${resultData.video.title}".`,
+        title: 'Language Updated!',
+        message: `Loaded ${transcriptData.languageName} transcript.`,
         type: 'success'
       });
     } catch (err) {
-      console.error('Retry Transcript Error:', err);
+      console.error('Language Fetch Error:', err);
       const message = parseErrorMessage(err);
-      setErrorMsg(`Transcript retrieval retry failed: ${message}`);
-      showToast({ title: 'Transcript Retry Failed', message, type: 'error' });
+      setErrorMsg(message);
+      showToast({ title: 'Transcript Language Error', message, type: 'error' });
     } finally {
       setIsAnalyzing(false);
     }
+  };
+
+  const handleRetryTranscript = async () => {
+    if (!resultData?.video) return;
+    handleFetchLanguage(selectedLanguage);
   };
 
   const filteredSegments = resultData?.transcript?.segments?.filter((seg) =>
@@ -254,6 +288,30 @@ export const AnalyzeVideo = () => {
                     className="w-full bg-transparent text-sm sm:text-base text-text-primary outline-none placeholder:text-text-muted font-medium"
                   />
                 </div>
+              </div>
+
+              {/* Language Selector */}
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-3 border-t border-slate-800">
+                <div className="flex items-center gap-2 text-xs font-semibold text-text-secondary uppercase tracking-wider">
+                  <Globe className="w-4 h-4 text-brand-indigo" />
+                  <span>Transcript Language</span>
+                </div>
+                <select
+                  value={selectedLanguage}
+                  onChange={(e) => setSelectedLanguage(e.target.value)}
+                  className="px-3 py-1.5 rounded-xl bg-dark-900 border border-slate-700 text-xs font-medium text-text-primary focus:border-brand-indigo outline-none cursor-pointer"
+                >
+                  <option value="en">English (Default)</option>
+                  <option value="hi">Hindi</option>
+                  <option value="es">Spanish</option>
+                  <option value="fr">French</option>
+                  <option value="de">German</option>
+                  <option value="pt">Portuguese</option>
+                  <option value="ja">Japanese</option>
+                  <option value="ko">Korean</option>
+                  <option value="zh">Chinese</option>
+                  <option value="auto">Auto Detect</option>
+                </select>
               </div>
 
               {/* Sample pre-fill links */}
@@ -388,7 +446,7 @@ export const AnalyzeVideo = () => {
                       ID: {resultData.video.videoId}
                     </Badge>
                     <Badge variant="outline" size="sm">
-                      Lang: {resultData.transcript?.language || 'N/A'}
+                      Transcript Language: {resultData.transcript?.languageName || 'N/A'}
                     </Badge>
                   </div>
 
@@ -437,37 +495,62 @@ export const AnalyzeVideo = () => {
                       <ListFilter className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="text-base font-bold font-heading text-white">
-                        Retrieved Video Transcript
+                      <h4 className="text-base font-bold font-heading text-white flex items-center gap-2">
+                        <span>Retrieved Video Transcript</span>
+                        <Badge variant="indigo" size="sm">
+                          {resultData.transcript?.languageName || 'English'}
+                        </Badge>
                       </h4>
                       <p className="text-xs text-text-muted">
-                        Preserved timestamps `[start]` & `duration` ready for interactive learning
+                        Transcript Language: {resultData.transcript?.languageName || 'English'} • Preserved timestamps `[start]` & `duration`
                       </p>
                     </div>
                   </div>
 
-                  {/* View Switcher Tabs */}
-                  <div className="flex items-center bg-dark-900 p-1 rounded-xl border border-slate-800">
-                    <button
-                      onClick={() => setActiveViewTab('segments')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                        activeViewTab === 'segments'
-                          ? 'bg-brand-indigo text-white shadow-md'
-                          : 'text-text-muted hover:text-white'
-                      }`}
-                    >
-                      Timestamped Segments ({resultData.transcript.segments.length})
-                    </button>
-                    <button
-                      onClick={() => setActiveViewTab('fullText')}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                        activeViewTab === 'fullText'
-                          ? 'bg-brand-indigo text-white shadow-md'
-                          : 'text-text-muted hover:text-white'
-                      }`}
-                    >
-                      Full Text
-                    </button>
+                  {/* View Switcher & Language Change */}
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-1.5 bg-dark-900 px-2.5 py-1 rounded-xl border border-slate-800 text-xs">
+                      <Globe className="w-3.5 h-3.5 text-brand-indigo shrink-0" />
+                      <select
+                        value={selectedLanguage}
+                        onChange={(e) => handleFetchLanguage(e.target.value)}
+                        className="bg-transparent text-xs font-semibold text-brand-lightViolet outline-none cursor-pointer"
+                      >
+                        <option value="en">English</option>
+                        <option value="hi">Hindi</option>
+                        <option value="es">Spanish</option>
+                        <option value="fr">French</option>
+                        <option value="de">German</option>
+                        <option value="pt">Portuguese</option>
+                        <option value="ja">Japanese</option>
+                        <option value="ko">Korean</option>
+                        <option value="zh">Chinese</option>
+                        <option value="auto">Auto Detect</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-center bg-dark-900 p-1 rounded-xl border border-slate-800">
+                      <button
+                        onClick={() => setActiveViewTab('segments')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                          activeViewTab === 'segments'
+                            ? 'bg-brand-indigo text-white shadow-md'
+                            : 'text-text-muted hover:text-white'
+                        }`}
+                      >
+                        Timestamped Segments ({resultData.transcript.segments.length})
+                      </button>
+                      <button
+                        onClick={() => setActiveViewTab('fullText')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                          activeViewTab === 'fullText'
+                            ? 'bg-brand-indigo text-white shadow-md'
+                            : 'text-text-muted hover:text-white'
+                        }`}
+                      >
+                        Full Text
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -521,15 +604,36 @@ export const AnalyzeVideo = () => {
                 <p className="text-sm font-semibold">
                   Transcript could not be loaded automatically.
                 </p>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleRetryTranscript}
-                  leftIcon={<RefreshCw className="w-4 h-4" />}
-                  className="mx-auto border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
-                >
-                  Retry Transcript Retrieval
-                </Button>
+                <div className="flex items-center justify-center gap-3 pt-1">
+                  <div className="flex items-center gap-1.5 bg-dark-900 px-3 py-1.5 rounded-xl border border-amber-500/40 text-xs">
+                    <Globe className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <select
+                      value={selectedLanguage}
+                      onChange={(e) => setSelectedLanguage(e.target.value)}
+                      className="bg-transparent text-xs font-semibold text-amber-300 outline-none cursor-pointer"
+                    >
+                      <option value="en">English</option>
+                      <option value="hi">Hindi</option>
+                      <option value="es">Spanish</option>
+                      <option value="fr">French</option>
+                      <option value="de">German</option>
+                      <option value="pt">Portuguese</option>
+                      <option value="ja">Japanese</option>
+                      <option value="ko">Korean</option>
+                      <option value="zh">Chinese</option>
+                      <option value="auto">Auto Detect</option>
+                    </select>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleRetryTranscript}
+                    leftIcon={<RefreshCw className="w-4 h-4" />}
+                    className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                  >
+                    Retrieve Transcript
+                  </Button>
+                </div>
               </Card>
             )}
           </motion.div>
@@ -538,3 +642,4 @@ export const AnalyzeVideo = () => {
     </AppLayout>
   );
 };
+

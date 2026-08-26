@@ -23,6 +23,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+SUPPORTED_LANGUAGES = {
+    "en": "English",
+    "hi": "Hindi",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese"
+}
+
 class VideoInfoRequest(BaseModel):
     url: str
 
@@ -35,6 +47,7 @@ class VideoInfoResponse(BaseModel):
 
 class TranscriptRequest(BaseModel):
     url: str
+    language: str | None = "en"
 
 class TranscriptSegmentModel(BaseModel):
     text: str
@@ -44,8 +57,17 @@ class TranscriptSegmentModel(BaseModel):
 class TranscriptResponse(BaseModel):
     videoId: str
     language: str
+    languageName: str
     segments: list[TranscriptSegmentModel]
     fullText: str
+
+class LanguageOption(BaseModel):
+    code: str
+    name: str
+    available: bool
+
+class LanguagesResponse(BaseModel):
+    languages: list[LanguageOption]
 
 def extract_video_id(url: str) -> str | None:
     if not url or not isinstance(url, str):
@@ -131,23 +153,62 @@ def fetch_youtube_oembed(video_id: str) -> dict:
             detail="Unable to process this video right now."
         )
 
-def fetch_youtube_transcript(video_id: str) -> dict:
+def fetch_youtube_transcript(video_id: str, target_lang: str = "en") -> dict:
+    target_lang = (target_lang or "en").lower().strip()
     try:
         api = YouTubeTranscriptApi()
         transcript_list = api.list(video_id)
         
-        try:
-            transcript_obj = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
-        except Exception:
-            available = list(transcript_list)
-            if not available:
+        selected_obj = None
+        used_code = target_lang
+        used_name = SUPPORTED_LANGUAGES.get(target_lang, target_lang.capitalize())
+        
+        if target_lang == "auto":
+            try:
+                selected_obj = transcript_list.find_transcript(['en', 'en-US', 'en-GB'])
+            except Exception:
+                available = list(transcript_list)
+                if not available:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="No transcript is available for this video."
+                    )
+                selected_obj = available[0]
+            used_code = getattr(selected_obj, 'language_code', 'en').split('-')[0].lower()
+            used_name = SUPPORTED_LANGUAGES.get(used_code, getattr(selected_obj, 'language', 'English'))
+        else:
+            # 1. Direct language match
+            for t in transcript_list:
+                t_code = t.language_code.split('-')[0].lower()
+                if t_code == target_lang:
+                    selected_obj = t
+                    used_code = t_code
+                    used_name = SUPPORTED_LANGUAGES.get(t_code, getattr(t, 'language', 'English'))
+                    break
+                    
+            # 2. Translation fallback
+            if not selected_obj:
+                for t in transcript_list:
+                    if getattr(t, 'is_translatable', False):
+                        for trans in getattr(t, 'translation_languages', []):
+                            t_code = getattr(trans, 'language_code', '').split('-')[0].lower()
+                            if t_code == target_lang:
+                                actual_target_code = getattr(trans, 'language_code', target_lang)
+                                selected_obj = t.translate(actual_target_code)
+                                used_code = target_lang
+                                used_name = SUPPORTED_LANGUAGES.get(target_lang, getattr(trans, 'language', target_lang.capitalize()))
+                                break
+                    if selected_obj:
+                        break
+                        
+            if not selected_obj:
+                lang_display = SUPPORTED_LANGUAGES.get(target_lang, target_lang.upper())
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Transcript is unavailable for this video."
+                    detail=f"{lang_display} transcript is not available for this video. Please choose another available language."
                 )
-            transcript_obj = available[0]
             
-        fetched_snippets = transcript_obj.fetch()
+        fetched_snippets = selected_obj.fetch()
         
         segments = []
         full_text_parts = []
@@ -166,7 +227,8 @@ def fetch_youtube_transcript(video_id: str) -> dict:
         
         return {
             "videoId": video_id,
-            "language": getattr(transcript_obj, 'language', 'en'),
+            "language": used_code,
+            "languageName": used_name,
             "segments": segments,
             "fullText": full_text
         }
@@ -175,7 +237,7 @@ def fetch_youtube_transcript(video_id: str) -> dict:
     except (TranscriptsDisabled, NoTranscriptFound):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Transcripts are disabled or unavailable for this video."
+            detail="No transcript is available for this video."
         )
     except (VideoUnavailable, VideoUnplayable):
         raise HTTPException(
@@ -185,12 +247,12 @@ def fetch_youtube_transcript(video_id: str) -> dict:
     except (YouTubeRequestFailed, requests.exceptions.Timeout):
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="YouTube request timed out while fetching transcript. Please try again."
+            detail="Transcript retrieval timed out. Please try again."
         )
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Transcript is unavailable for this video."
+            detail="No transcript is available for this video."
         )
 
 @app.post("/api/v1/video-info", response_model=VideoInfoResponse)
@@ -205,6 +267,62 @@ def get_video_info(req: VideoInfoRequest):
     metadata = fetch_youtube_oembed(video_id)
     return metadata
 
+@app.get("/api/v1/transcript/languages", response_model=LanguagesResponse)
+def get_transcript_languages(video_id: str):
+    vid = extract_video_id(video_id) if ('/' in video_id or 'http' in video_id.lower()) else video_id
+    if not vid or not re.match(r'^[a-zA-Z0-9_-]{11}$', vid):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please enter a valid YouTube URL or 11-character video ID."
+        )
+        
+    try:
+        api = YouTubeTranscriptApi()
+        transcript_list = api.list(vid)
+        
+        available_codes = set()
+        for t in transcript_list:
+            code = t.language_code.split('-')[0].lower()
+            if code in SUPPORTED_LANGUAGES:
+                available_codes.add(code)
+            if getattr(t, 'is_translatable', False):
+                for trans in getattr(t, 'translation_languages', []):
+                    t_code = getattr(trans, 'language_code', '').split('-')[0].lower()
+                    if t_code in SUPPORTED_LANGUAGES:
+                        available_codes.add(t_code)
+                        
+        lang_list = []
+        for code, name in SUPPORTED_LANGUAGES.items():
+            lang_list.append(LanguageOption(
+                code=code,
+                name=name,
+                available=(code in available_codes)
+            ))
+            
+        return LanguagesResponse(languages=lang_list)
+    except HTTPException:
+        raise
+    except (TranscriptsDisabled, NoTranscriptFound):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No transcript is available for this video."
+        )
+    except (VideoUnavailable, VideoUnplayable):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This video is unavailable, private, or restricted."
+        )
+    except (YouTubeRequestFailed, requests.exceptions.Timeout):
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Transcript retrieval timed out. Please try again."
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No transcript is available for this video."
+        )
+
 @app.post("/api/v1/transcript", response_model=TranscriptResponse)
 def get_transcript(req: TranscriptRequest):
     video_id = extract_video_id(req.url)
@@ -213,4 +331,5 @@ def get_transcript(req: TranscriptRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Please enter a valid YouTube URL."
         )
-    return fetch_youtube_transcript(video_id)
+    return fetch_youtube_transcript(video_id, target_lang=req.language or "en")
+
