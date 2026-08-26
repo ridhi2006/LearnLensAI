@@ -1,7 +1,14 @@
+import api from './api';
 import { MOCK_VIDEOS, DEFAULT_VIDEO_ID } from '../data/mockVideos';
 import { MOCK_TRANSCRIPTS, MOCK_TIMESTAMP_QA } from '../data/mockTranscript';
+import { extractVideoId } from '../utils/youtube';
 
 export const videoService = {
+  // Fetch real YouTube video metadata from backend
+  async getVideoInfo(url) {
+    return await api.post('/video-info', { url });
+  },
+
   // Get all library videos
   async getAllVideos() {
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -14,10 +21,14 @@ export const videoService = {
     return MOCK_VIDEOS[videoId] || MOCK_VIDEOS[DEFAULT_VIDEO_ID];
   },
 
-  // Get transcript by video ID
-  async getTranscript(videoId = DEFAULT_VIDEO_ID) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    return MOCK_TRANSCRIPTS[videoId] || MOCK_TRANSCRIPTS[DEFAULT_VIDEO_ID] || [];
+  // Fetch real YouTube transcript from backend
+  async getTranscript(urlOrId = DEFAULT_VIDEO_ID) {
+    if (!urlOrId) return { videoId: '', language: 'en', segments: [], fullText: '' };
+    const url = typeof urlOrId === 'string' && urlOrId.includes('/')
+      ? urlOrId
+      : `https://www.youtube.com/watch?v=${urlOrId}`;
+
+    return await api.post('/transcript', { url });
   },
 
   // Get timestamp Q&A data
@@ -44,10 +55,9 @@ export const videoService = {
     };
   },
 
-  // Simulate analyzing a YouTube URL
+  // Extract YouTube ID using robust parser
   extractYouTubeId(url) {
-    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-    const match = url?.match(regExp);
-    return (match && match[2].length === 11) ? match[2] : 'MFhxShGxHWc';
+    return extractVideoId(url);
   }
 };
+

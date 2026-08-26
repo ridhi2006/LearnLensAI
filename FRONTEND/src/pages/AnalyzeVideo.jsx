@@ -1,16 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import {
   Sparkles,
   BookOpen,
   GraduationCap,
   RotateCcw,
   Briefcase,
-  CheckCircle2,
   Loader2,
-  ArrowRight,
-  Check
+  Check,
+  FileText,
+  Clock,
+  Search,
+  AlertCircle,
+  RefreshCw,
+  Video,
+  ListFilter
 } from 'lucide-react';
 import { YoutubeIcon } from '../components/common/BrandIcons';
 import { AppLayout } from '../components/layout/AppLayout';
@@ -19,6 +24,8 @@ import { Button } from '../components/common/Button';
 import { Badge } from '../components/common/Badge';
 import { useLearning } from '../context/LearningContext';
 import { useToast } from '../context/ToastContext';
+import { extractVideoId } from '../utils/youtube';
+import { videoService } from '../services/videoService';
 
 export const AnalyzeVideo = () => {
   const [searchParams] = useSearchParams();
@@ -27,11 +34,16 @@ export const AnalyzeVideo = () => {
   const [url, setUrl] = useState(initialUrl);
   const [selectedMode, setSelectedMode] = useState('College');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [currentStepIndex, setCurrentStepIndex] = useState(-1);
+  const [loadingStep, setLoadingStep] = useState('Validating YouTube URL...');
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [resultData, setResultData] = useState(null);
 
-  const { setLearningMode, setActiveVideoId } = useLearning();
+  // Transcript viewing state
+  const [activeViewTab, setActiveViewTab] = useState('segments'); // 'segments' | 'fullText'
+  const [searchTerm, setSearchTerm] = useState('');
+
+  const { setLearningMode, setActiveVideoId, setActiveMember1Output } = useLearning();
   const { showToast } = useToast();
-  const navigate = useNavigate();
 
   const learningModes = [
     {
@@ -68,47 +80,67 @@ export const AnalyzeVideo = () => {
     }
   ];
 
-  const analysisSteps = [
-    { id: 1, label: 'Extracting Transcript & Timestamps' },
-    { id: 2, label: 'Understanding Algorithmic Concepts' },
-    { id: 3, label: 'Generating Summary & Cheat Formulas' },
-    { id: 4, label: 'Creating Multi-level Quiz Material' },
-    { id: 5, label: 'Building Interactive Knowledge Graph' },
-    { id: 6, label: 'Preparing Your Personalized Learning Path' }
-  ];
-
-  const handleStartAnalysis = (e) => {
-    e.preventDefault();
-    if (!url.trim()) return;
-
-    setIsAnalyzing(true);
-    setCurrentStepIndex(0);
-    setLearningMode(selectedMode);
+  // Format seconds into MM:SS timestamp display
+  const formatTimestamp = (seconds) => {
+    if (typeof seconds !== 'number' || isNaN(seconds)) return '00:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  useEffect(() => {
-    if (!isAnalyzing) return;
+  const handleStartAnalysis = async (e) => {
+    e.preventDefault();
+    setErrorMsg(null);
 
-    if (currentStepIndex < analysisSteps.length) {
-      const timer = setTimeout(() => {
-        setCurrentStepIndex((prev) => prev + 1);
-      }, 700);
-      return () => clearTimeout(timer);
-    } else {
-      // Completed all steps
-      const completeTimer = setTimeout(() => {
-        setIsAnalyzing(false);
-        setActiveVideoId('demo-binary-search');
-        showToast({
-          title: 'Analysis complete!',
-          message: 'Your interactive LearnLens workspace is ready.',
-          type: 'success'
-        });
-        navigate('/learn/demo-binary-search');
-      }, 600);
-      return () => clearTimeout(completeTimer);
+    const videoId = extractVideoId(url);
+    if (!videoId) {
+      const err = 'Please enter a valid YouTube URL.';
+      setErrorMsg(err);
+      showToast({ title: 'Invalid URL', message: err, type: 'error' });
+      return;
     }
-  }, [isAnalyzing, currentStepIndex, navigate, setActiveVideoId, setLearningMode, selectedMode, showToast]);
+
+    setIsAnalyzing(true);
+    setLearningMode(selectedMode);
+    setResultData(null);
+
+    try {
+      // Step 1: Real Video Information
+      setLoadingStep('Retrieving real YouTube video metadata...');
+      const videoInfo = await videoService.getVideoInfo(url);
+
+      // Step 2: Real Transcript Retrieval
+      setLoadingStep('Retrieving & cleaning real transcript timestamps...');
+      const transcriptData = await videoService.getTranscript(url);
+
+      const member1Output = {
+        video: videoInfo,
+        transcript: transcriptData
+      };
+
+      // Store in LearningContext
+      setActiveMember1Output(member1Output);
+      setActiveVideoId(videoInfo.videoId);
+      setResultData(member1Output);
+
+      showToast({
+        title: 'Transcript Retrieved!',
+        message: `Successfully loaded transcript for "${videoInfo.title}".`,
+        type: 'success'
+      });
+    } catch (err) {
+      console.error('Member 1 Analysis Error:', err);
+      const message = err.response?.data?.detail || err.message || 'Unable to process this video right now.';
+      setErrorMsg(message);
+      showToast({ title: 'Analysis Failed', message, type: 'error' });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const filteredSegments = resultData?.transcript?.segments?.filter((seg) =>
+    seg.text.toLowerCase().includes(searchTerm.toLowerCase())
+  ) || [];
 
   return (
     <AppLayout title="Analyze Video" subtitle="Transform any YouTube lecture into an interactive workspace.">
@@ -119,11 +151,23 @@ export const AnalyzeVideo = () => {
             Analyze a YouTube Video
           </h2>
           <p className="text-xs sm:text-sm text-text-secondary">
-            Transform any educational video into an interactive learning workspace.
+            Retrieve real video metadata and timestamped transcripts directly from YouTube.
           </p>
         </div>
 
-        {!isAnalyzing ? (
+        {/* Error Notification Banner */}
+        {errorMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="p-4 rounded-2xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm flex items-center gap-3 shadow-lg"
+          >
+            <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+            <span className="font-medium">{errorMsg}</span>
+          </motion.div>
+        )}
+
+        {!isAnalyzing && !resultData && (
           <form onSubmit={handleStartAnalysis} className="space-y-8">
             {/* Main URL Input Card */}
             <Card padding="lg" className="space-y-4 border-slate-800 bg-dark-800/90 shadow-2xl">
@@ -139,7 +183,10 @@ export const AnalyzeVideo = () => {
                     type="url"
                     required
                     value={url}
-                    onChange={(e) => setUrl(e.target.value)}
+                    onChange={(e) => {
+                      setUrl(e.target.value);
+                      setErrorMsg(null);
+                    }}
                     placeholder="Paste YouTube URL (e.g. https://www.youtube.com/watch?v=...)"
                     className="w-full bg-transparent text-sm sm:text-base text-text-primary outline-none placeholder:text-text-muted font-medium"
                   />
@@ -158,17 +205,17 @@ export const AnalyzeVideo = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setUrl('https://www.youtube.com/watch?v=pcKY4hjDrxk')}
+                  onClick={() => setUrl('https://www.youtube.com/watch?v=TNhaISOUy6Q')}
                   className="px-2.5 py-1 rounded-lg bg-dark-900 border border-slate-800 text-brand-cyan hover:border-brand-cyan/40 transition-colors"
                 >
-                  Graph BFS & DFS
+                  React 19 in 100s
                 </button>
                 <button
                   type="button"
-                  onClick={() => setUrl('https://www.youtube.com/watch?v=TNhaISOUy6Q')}
+                  onClick={() => setUrl('https://youtu.be/pcKY4hjDrxk')}
                   className="px-2.5 py-1 rounded-lg bg-dark-900 border border-slate-800 text-emerald-400 hover:border-emerald-500/40 transition-colors"
                 >
-                  React 19 Hooks
+                  Graph BFS & DFS
                 </button>
               </div>
             </Card>
@@ -238,56 +285,180 @@ export const AnalyzeVideo = () => {
                 className="w-full font-bold text-base shadow-xl py-4"
                 rightIcon={<Sparkles className="w-5 h-5" />}
               >
-                Analyze Video & Build Workspace
+                Analyze Video & Retrieve Transcript
               </Button>
             </div>
           </form>
-        ) : (
-          /* Multi-step Loading Animation Experience */
-          <Card padding="lg" className="border-brand-indigo/40 bg-dark-800/90 shadow-2xl space-y-8 py-10">
-            <div className="text-center space-y-2 max-w-md mx-auto">
-              <div className="w-14 h-14 mx-auto rounded-2xl bg-brand-indigo/20 border border-brand-indigo/40 flex items-center justify-center text-brand-lightViolet animate-pulse">
-                <Sparkles className="w-7 h-7 text-brand-cyan" />
-              </div>
+        )}
+
+        {/* Real Loading State */}
+        {isAnalyzing && (
+          <Card padding="lg" className="border-brand-indigo/40 bg-dark-800/90 shadow-2xl space-y-8 py-12 text-center">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-brand-indigo/20 border border-brand-indigo/40 flex items-center justify-center text-brand-cyan animate-spin">
+              <Loader2 className="w-8 h-8" />
+            </div>
+            <div className="space-y-2">
               <h3 className="text-xl font-bold font-heading text-white">
-                LearnLens Intelligence Processing
+                Member 1 Processing Pipeline
               </h3>
-              <p className="text-xs text-text-muted font-mono">
+              <p className="text-sm text-brand-lightViolet font-medium animate-pulse">
+                {loadingStep}
+              </p>
+              <p className="text-xs text-text-muted font-mono pt-2">
                 {url}
               </p>
             </div>
+          </Card>
+        )}
 
-            {/* Steps List with animated checkmarks */}
-            <div className="max-w-md mx-auto space-y-3.5">
-              {analysisSteps.map((step, idx) => {
-                const isCompleted = idx < currentStepIndex;
-                const isCurrent = idx === currentStepIndex;
-                return (
-                  <motion.div
-                    key={step.id}
-                    initial={{ opacity: 0, x: -10 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    className={`flex items-center gap-3.5 p-3 rounded-xl border text-xs font-medium transition-all ${
-                      isCompleted
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : isCurrent
-                        ? 'bg-brand-indigo/20 border-brand-indigo/50 text-brand-lightViolet font-semibold shadow-md'
-                        : 'bg-dark-900/50 border-slate-800 text-text-muted opacity-40'
+        {/* Real Member 1 Result Display */}
+        {resultData && !isAnalyzing && (
+          <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+            {/* Real Video Metadata Header */}
+            <Card padding="lg" className="border-slate-800 bg-dark-800/90 shadow-2xl space-y-6">
+              <div className="flex flex-col md:flex-row gap-6 items-start">
+                <img
+                  src={resultData.video.thumbnail}
+                  alt={resultData.video.title}
+                  className="w-full md:w-64 h-36 object-cover rounded-xl border border-slate-700 shadow-md shrink-0"
+                />
+                <div className="space-y-3 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="cyan" size="sm">
+                      Real Video Metadata
+                    </Badge>
+                    <Badge variant="indigo" size="sm">
+                      ID: {resultData.video.videoId}
+                    </Badge>
+                    <Badge variant="outline" size="sm">
+                      Lang: {resultData.transcript.language}
+                    </Badge>
+                  </div>
+
+                  <h3 className="text-xl font-extrabold font-heading text-white leading-tight">
+                    {resultData.video.title}
+                  </h3>
+
+                  <div className="flex flex-wrap items-center gap-4 text-xs text-text-muted">
+                    <span className="font-semibold text-brand-lightViolet flex items-center gap-1.5">
+                      <Video className="w-4 h-4 text-brand-indigo" />
+                      Channel: {resultData.video.channel || 'Unknown Channel'}
+                    </span>
+                    <span className="flex items-center gap-1.5 text-emerald-400 font-mono">
+                      <FileText className="w-4 h-4 text-emerald-400" />
+                      {resultData.transcript.segments.length} Timestamped Segments
+                    </span>
+                    <span className="flex items-center gap-1.5 text-text-muted font-mono">
+                      <Clock className="w-4 h-4 text-text-muted" />
+                      {resultData.transcript.fullText.split(/\s+/).length} Words Total
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setResultData(null);
+                    setErrorMsg(null);
+                  }}
+                  leftIcon={<RefreshCw className="w-4 h-4" />}
+                >
+                  Analyze Another Video
+                </Button>
+              </div>
+            </Card>
+
+            {/* Real Transcript Display Box */}
+            <Card padding="lg" className="border-slate-800 bg-dark-800/90 shadow-2xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-brand-indigo/10 border border-brand-indigo/20 flex items-center justify-center text-brand-lightViolet">
+                    <ListFilter className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-base font-bold font-heading text-white">
+                      Retrieved Member 1 Transcript
+                    </h4>
+                    <p className="text-xs text-text-muted">
+                      Preserved timestamps `[start]` & `duration` ready for Member 2 & 3
+                    </p>
+                  </div>
+                </div>
+
+                {/* View Switcher Tabs */}
+                <div className="flex items-center bg-dark-900 p-1 rounded-xl border border-slate-800">
+                  <button
+                    onClick={() => setActiveViewTab('segments')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      activeViewTab === 'segments'
+                        ? 'bg-brand-indigo text-white shadow-md'
+                        : 'text-text-muted hover:text-white'
                     }`}
                   >
-                    {isCompleted ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    ) : isCurrent ? (
-                      <Loader2 className="w-4 h-4 text-brand-cyan animate-spin shrink-0" />
+                    Timestamped Segments ({resultData.transcript.segments.length})
+                  </button>
+                  <button
+                    onClick={() => setActiveViewTab('fullText')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                      activeViewTab === 'fullText'
+                        ? 'bg-brand-indigo text-white shadow-md'
+                        : 'text-text-muted hover:text-white'
+                    }`}
+                  >
+                    Full Text
+                  </button>
+                </div>
+              </div>
+
+              {activeViewTab === 'segments' ? (
+                <div className="space-y-3">
+                  {/* Search input */}
+                  <div className="flex items-center gap-2 p-2.5 rounded-xl bg-dark-900 border border-slate-800 focus-within:border-brand-indigo transition-colors">
+                    <Search className="w-4 h-4 text-text-muted shrink-0" />
+                    <input
+                      type="text"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                      placeholder="Search within transcript segments..."
+                      className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
+                    />
+                  </div>
+
+                  <div className="max-h-96 overflow-y-auto space-y-2 pr-2 scrollbar-thin scrollbar-thumb-slate-700">
+                    {filteredSegments.length > 0 ? (
+                      filteredSegments.map((seg, idx) => (
+                        <div
+                          key={idx}
+                          className="p-3 rounded-xl bg-dark-900/80 border border-slate-800/80 hover:border-slate-700 flex items-start gap-3 transition-colors text-xs"
+                        >
+                          <span className="px-2 py-1 rounded bg-brand-indigo/15 text-brand-lightViolet border border-brand-indigo/30 font-mono font-bold shrink-0">
+                            {formatTimestamp(seg.start)}
+                          </span>
+                          <div className="flex-1 text-text-secondary leading-relaxed pt-0.5">
+                            {seg.text}
+                          </div>
+                          <span className="text-[10px] text-text-muted font-mono shrink-0 pt-1">
+                            +{seg.duration}s
+                          </span>
+                        </div>
+                      ))
                     ) : (
-                      <div className="w-4 h-4 rounded-full border border-slate-700 shrink-0" />
+                      <div className="p-8 text-center text-xs text-text-muted">
+                        No segments matched your search term.
+                      </div>
                     )}
-                    <span>{step.label}</span>
-                  </motion.div>
-                );
-              })}
-            </div>
-          </Card>
+                  </div>
+                </div>
+              ) : (
+                <div className="max-h-96 overflow-y-auto p-4 rounded-xl bg-dark-900/90 border border-slate-800 text-xs text-text-secondary leading-relaxed font-sans whitespace-pre-wrap">
+                  {resultData.transcript.fullText}
+                </div>
+              )}
+            </Card>
+          </motion.div>
         )}
       </div>
     </AppLayout>

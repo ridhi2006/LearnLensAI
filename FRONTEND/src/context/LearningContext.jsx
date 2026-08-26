@@ -5,6 +5,7 @@ const LearningContext = createContext(null);
 
 export const LearningProvider = ({ children }) => {
   const [activeVideoId, setActiveVideoId] = useState(DEFAULT_VIDEO_ID);
+  const [activeMember1Output, setActiveMember1Output] = useState(null);
   const [learningMode, setLearningMode] = useState('College'); // 'Beginner' | 'College' | 'Revision' | 'Interview'
   const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'transcript' | 'notes' | 'graph' | 'quiz' | 'tutor' | 'roadmap'
   const [currentTimestamp, setCurrentTimestamp] = useState('00:00');
@@ -24,6 +25,8 @@ export const LearningProvider = ({ children }) => {
       value={{
         activeVideoId,
         setActiveVideoId,
+        activeMember1Output,
+        setActiveMember1Output,
         learningMode,
         setLearningMode,
         activeTab,
