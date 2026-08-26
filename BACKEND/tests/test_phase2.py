@@ -94,21 +94,28 @@ class TestPhase2VideoInfo(unittest.TestCase):
         mock_resp.status_code = 404
         mock_get.return_value = mock_resp
 
-        res = client.post("/api/v1/video-info", json={"url": "https://www.youtube.com/watch?v=invalid_id_99"})
-        
-        # Note: 'invalid_id_99' is 13 chars so rejected at URL validation, but if 11 chars non-existent:
         res = client.post("/api/v1/video-info", json={"url": "https://www.youtube.com/watch?v=nonexist123"})
         self.assertEqual(res.status_code, 404)
-        self.assertEqual(res.json()["detail"], "Video metadata is unavailable.")
+        self.assertEqual(res.json()["detail"], "This video is unavailable, private, or does not exist.")
 
     @patch('requests.get')
     def test_8_network_server_failure_500(self, mock_get):
-        mock_get.side_effect = Exception("Connection timed out")
+        mock_get.side_effect = Exception("Connection error")
 
         res = client.post("/api/v1/video-info", json={"url": "https://www.youtube.com/watch?v=-IEn_5PTTdk"})
         
         self.assertEqual(res.status_code, 500)
         self.assertEqual(res.json()["detail"], "Unable to process this video right now.")
+
+    @patch('requests.get')
+    def test_9_timeout_504(self, mock_get):
+        import requests
+        mock_get.side_effect = requests.exceptions.Timeout("Read timed out")
+
+        res = client.post("/api/v1/video-info", json={"url": "https://www.youtube.com/watch?v=-IEn_5PTTdk"})
+        
+        self.assertEqual(res.status_code, 504)
+        self.assertEqual(res.json()["detail"], "YouTube request timed out while fetching video details.")
 
 if __name__ == '__main__':
     unittest.main()

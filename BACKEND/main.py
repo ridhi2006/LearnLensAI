@@ -4,7 +4,14 @@ from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import requests
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import (
+    YouTubeTranscriptApi,
+    TranscriptsDisabled,
+    NoTranscriptFound,
+    VideoUnavailable,
+    VideoUnplayable,
+    YouTubeRequestFailed,
+)
 
 app = FastAPI(title="LearnLensAI Backend", version="1.0.0")
 
@@ -87,11 +94,11 @@ def fetch_youtube_oembed(video_id: str) -> dict:
     oembed_url = f"https://www.youtube.com/oembed?url={quote(watch_url)}&format=json"
     
     try:
-        response = requests.get(oembed_url, timeout=5)
+        response = requests.get(oembed_url, timeout=15)
         if response.status_code == 404:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Video metadata is unavailable."
+                detail="This video is unavailable, private, or does not exist."
             )
         if response.status_code != 200:
             raise HTTPException(
@@ -108,10 +115,15 @@ def fetch_youtube_oembed(video_id: str) -> dict:
         }
     except HTTPException:
         raise
+    except requests.exceptions.Timeout:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="YouTube request timed out while fetching video details."
+        )
     except requests.RequestException:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to process this video right now."
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Unable to reach YouTube server for metadata."
         )
     except Exception:
         raise HTTPException(
@@ -160,6 +172,21 @@ def fetch_youtube_transcript(video_id: str) -> dict:
         }
     except HTTPException:
         raise
+    except (TranscriptsDisabled, NoTranscriptFound):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Transcripts are disabled or unavailable for this video."
+        )
+    except (VideoUnavailable, VideoUnplayable):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="This video is unavailable, private, or restricted."
+        )
+    except (YouTubeRequestFailed, requests.exceptions.Timeout):
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="YouTube request timed out while fetching transcript. Please try again."
+        )
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

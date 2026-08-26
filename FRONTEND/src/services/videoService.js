@@ -6,7 +6,7 @@ import { extractVideoId } from '../utils/youtube';
 export const videoService = {
   // Fetch real YouTube video metadata from backend
   async getVideoInfo(url) {
-    return await api.post('/video-info', { url });
+    return await api.post('/video-info', { url }, { timeout: 30000 });
   },
 
   // Get all library videos
@@ -28,7 +28,7 @@ export const videoService = {
       ? urlOrId
       : `https://www.youtube.com/watch?v=${urlOrId}`;
 
-    return await api.post('/transcript', { url });
+    return await api.post('/transcript', { url }, { timeout: 90000 });
   },
 
   // Get timestamp Q&A data

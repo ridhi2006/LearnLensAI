@@ -88,13 +88,32 @@ export const AnalyzeVideo = () => {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const parseErrorMessage = (err) => {
+    if (err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
+      return 'Request timed out while contacting YouTube. Please try again or check your network connection.';
+    }
+    if (err?.response?.data?.detail) {
+      return err.response.data.detail;
+    }
+    if (err?.response?.status === 504 || err?.response?.status === 408) {
+      return 'YouTube request timed out while fetching video data. Please try again.';
+    }
+    if (err?.response?.status === 502) {
+      return 'Unable to reach YouTube services. Please check your network connection.';
+    }
+    if (!err?.response && (err?.message?.includes('Network Error') || err?.code === 'ERR_NETWORK')) {
+      return 'Unable to connect to LearnLens server. Please make sure the backend server is running.';
+    }
+    return err?.message || 'Unable to process this video right now.';
+  };
+
   const handleStartAnalysis = async (e) => {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setErrorMsg(null);
 
     const videoId = extractVideoId(url);
     if (!videoId) {
-      const err = 'Please enter a valid YouTube URL.';
+      const err = 'Please enter a valid YouTube URL (e.g. https://www.youtube.com/watch?v=...).';
       setErrorMsg(err);
       showToast({ title: 'Invalid URL', message: err, type: 'error' });
       return;
@@ -104,35 +123,79 @@ export const AnalyzeVideo = () => {
     setLearningMode(selectedMode);
     setResultData(null);
 
+    let videoInfo = null;
+
     try {
       // Step 1: Real Video Information
-      setLoadingStep('Retrieving real YouTube video metadata...');
-      const videoInfo = await videoService.getVideoInfo(url);
+      setLoadingStep('Retrieving video metadata from YouTube...');
+      videoInfo = await videoService.getVideoInfo(url);
+
+      // Preserve metadata immediately so it is not lost if transcript fails
+      const partialOutput = {
+        video: videoInfo,
+        transcript: null
+      };
+      setResultData(partialOutput);
 
       // Step 2: Real Transcript Retrieval
-      setLoadingStep('Retrieving & cleaning real transcript timestamps...');
-      const transcriptData = await videoService.getTranscript(url);
+      setLoadingStep('Retrieving full transcript & timestamps from YouTube (longer videos may take a few extra seconds)...');
+      try {
+        const transcriptData = await videoService.getTranscript(url);
+        const completeOutput = {
+          video: videoInfo,
+          transcript: transcriptData
+        };
+        setActiveMember1Output(completeOutput);
+        setActiveVideoId(videoInfo.videoId);
+        setResultData(completeOutput);
 
-      const member1Output = {
-        video: videoInfo,
+        showToast({
+          title: 'Analysis Complete!',
+          message: `Successfully loaded metadata & transcript for "${videoInfo.title}".`,
+          type: 'success'
+        });
+      } catch (transcriptErr) {
+        console.error('Transcript Retrieval Error:', transcriptErr);
+        const message = parseErrorMessage(transcriptErr);
+        setErrorMsg(`Video metadata loaded successfully, but transcript retrieval failed: ${message}`);
+        showToast({ title: 'Transcript Unavailable', message, type: 'warning' });
+      }
+    } catch (videoErr) {
+      console.error('Video Info Error:', videoErr);
+      const message = parseErrorMessage(videoErr);
+      setErrorMsg(message);
+      showToast({ title: 'Analysis Failed', message, type: 'error' });
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleRetryTranscript = async () => {
+    if (!resultData?.video) return;
+    setIsAnalyzing(true);
+    setErrorMsg(null);
+    setLoadingStep('Retrying transcript retrieval from YouTube...');
+
+    try {
+      const transcriptData = await videoService.getTranscript(resultData.video.videoId);
+      const completeOutput = {
+        video: resultData.video,
         transcript: transcriptData
       };
-
-      // Store in LearningContext
-      setActiveMember1Output(member1Output);
-      setActiveVideoId(videoInfo.videoId);
-      setResultData(member1Output);
+      setActiveMember1Output(completeOutput);
+      setActiveVideoId(resultData.video.videoId);
+      setResultData(completeOutput);
 
       showToast({
         title: 'Transcript Retrieved!',
-        message: `Successfully loaded transcript for "${videoInfo.title}".`,
+        message: `Loaded transcript for "${resultData.video.title}".`,
         type: 'success'
       });
     } catch (err) {
-      console.error('Member 1 Analysis Error:', err);
-      const message = err.response?.data?.detail || err.message || 'Unable to process this video right now.';
-      setErrorMsg(message);
-      showToast({ title: 'Analysis Failed', message, type: 'error' });
+      console.error('Retry Transcript Error:', err);
+      const message = parseErrorMessage(err);
+      setErrorMsg(`Transcript retrieval retry failed: ${message}`);
+      showToast({ title: 'Transcript Retry Failed', message, type: 'error' });
     } finally {
       setIsAnalyzing(false);
     }
@@ -199,94 +262,88 @@ export const AnalyzeVideo = () => {
                 <button
                   type="button"
                   onClick={() => setUrl('https://www.youtube.com/watch?v=MFhxShGxHWc')}
-                  className="px-2.5 py-1 rounded-lg bg-dark-900 border border-slate-800 text-brand-lightViolet hover:border-brand-indigo/40 transition-colors"
+                  className="text-brand-lightViolet hover:underline font-mono"
                 >
-                  Binary Search Tutorial
+                  Binary Search (100s)
                 </button>
+                <span>•</span>
                 <button
                   type="button"
                   onClick={() => setUrl('https://www.youtube.com/watch?v=TNhaISOUy6Q')}
-                  className="px-2.5 py-1 rounded-lg bg-dark-900 border border-slate-800 text-brand-cyan hover:border-brand-cyan/40 transition-colors"
+                  className="text-brand-lightViolet hover:underline font-mono"
                 >
-                  React 19 in 100s
+                  10 React Hooks
                 </button>
+                <span>•</span>
                 <button
                   type="button"
-                  onClick={() => setUrl('https://youtu.be/pcKY4hjDrxk')}
-                  className="px-2.5 py-1 rounded-lg bg-dark-900 border border-slate-800 text-emerald-400 hover:border-emerald-500/40 transition-colors"
+                  onClick={() => setUrl('https://www.youtube.com/watch?v=pcKY4hjDrxk')}
+                  className="text-brand-lightViolet hover:underline font-mono"
                 >
-                  Graph BFS & DFS
+                  BFS & DFS Graphs
                 </button>
               </div>
+
+              <Button
+                type="submit"
+                variant="primary"
+                size="lg"
+                className="w-full justify-center text-base font-bold py-4 shadow-xl"
+                leftIcon={<Sparkles className="w-5 h-5" />}
+              >
+                Analyze Video & Fetch Transcript
+              </Button>
             </Card>
 
-            {/* Choose Learning Mode Section */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-base font-bold font-heading text-white">
-                    Choose Learning Mode
-                  </h3>
-                  <p className="text-xs text-text-muted mt-0.5">
-                    How should the AI explain concepts, generate notes, and assess your understanding?
-                  </p>
-                </div>
-                <Badge variant="primary" size="sm">
-                  {selectedMode} Selected
-                </Badge>
-              </div>
-
+            {/* Mode selection grid */}
+            <div className="space-y-3">
+              <label className="text-xs font-semibold text-text-secondary uppercase tracking-wider px-1">
+                Select Target Learning Depth
+              </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {learningModes.map((mode) => {
                   const Icon = mode.icon;
                   const isSelected = selectedMode === mode.id;
                   return (
-                    <div
+                    <Card
                       key={mode.id}
+                      hoverable
                       onClick={() => setSelectedMode(mode.id)}
-                      className={`p-5 rounded-2xl border transition-all cursor-pointer select-none flex flex-col justify-between space-y-3 ${
+                      className={`cursor-pointer transition-all duration-200 border-2 ${
                         isSelected
-                          ? 'bg-dark-800 border-brand-indigo/70 shadow-xl shadow-brand-indigo/15 ring-1 ring-brand-indigo/50'
-                          : 'bg-dark-900/80 border-slate-800/80 hover:bg-dark-800/60 hover:border-slate-700'
+                          ? `${mode.color} bg-dark-800 shadow-xl`
+                          : 'border-slate-800/80 bg-dark-900/60 hover:border-slate-700'
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className={`w-10 h-10 rounded-xl bg-dark-900 border flex items-center justify-center ${mode.color}`}>
-                          <Icon className="w-5 h-5" />
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                              isSelected ? 'bg-brand-indigo/20 text-white' : 'bg-dark-800 text-text-muted'
+                            }`}
+                          >
+                            <Icon className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-white font-heading">
+                              {mode.title}
+                            </h4>
+                            <p className="text-xs text-text-muted">{mode.subtitle}</p>
+                          </div>
                         </div>
-                        <div className={`w-6 h-6 rounded-full border flex items-center justify-center ${isSelected ? 'bg-brand-indigo border-brand-indigo text-white' : 'border-slate-700 text-transparent'}`}>
-                          <Check className="w-3.5 h-3.5" />
-                        </div>
+                        {isSelected && (
+                          <div className="w-5 h-5 rounded-full bg-brand-indigo flex items-center justify-center text-white">
+                            <Check className="w-3.5 h-3.5" />
+                          </div>
+                        )}
                       </div>
-
-                      <div>
-                        <h4 className={`text-sm font-bold ${isSelected ? 'text-white' : 'text-text-primary'}`}>
-                          {mode.title}
-                        </h4>
-                        <div className="text-[11px] font-medium text-brand-lightViolet mt-0.5">
-                          {mode.subtitle}
-                        </div>
-                        <p className="text-xs text-text-muted mt-1 leading-relaxed">
-                          {mode.description}
-                        </p>
-                      </div>
-                    </div>
+                      <p className="text-xs text-text-secondary pt-3 leading-relaxed border-t border-slate-800/50 mt-3">
+                        {mode.description}
+                      </p>
+                    </Card>
                   );
                 })}
               </div>
-            </div>
-
-            {/* Analyze CTA */}
-            <div className="pt-2">
-              <Button
-                type="submit"
-                variant="primary"
-                size="lg"
-                className="w-full font-bold text-base shadow-xl py-4"
-                rightIcon={<Sparkles className="w-5 h-5" />}
-              >
-                Analyze Video & Retrieve Transcript
-              </Button>
             </div>
           </form>
         )}
@@ -331,7 +388,7 @@ export const AnalyzeVideo = () => {
                       ID: {resultData.video.videoId}
                     </Badge>
                     <Badge variant="outline" size="sm">
-                      Lang: {resultData.transcript.language}
+                      Lang: {resultData.transcript?.language || 'N/A'}
                     </Badge>
                   </div>
 
@@ -346,11 +403,11 @@ export const AnalyzeVideo = () => {
                     </span>
                     <span className="flex items-center gap-1.5 text-emerald-400 font-mono">
                       <FileText className="w-4 h-4 text-emerald-400" />
-                      {resultData.transcript.segments.length} Timestamped Segments
+                      {resultData.transcript ? `${resultData.transcript.segments.length} Timestamped Segments` : 'Transcript Unavailable'}
                     </span>
                     <span className="flex items-center gap-1.5 text-text-muted font-mono">
                       <Clock className="w-4 h-4 text-text-muted" />
-                      {resultData.transcript.fullText.split(/\s+/).length} Words Total
+                      {resultData.transcript ? `${resultData.transcript.fullText.split(/\s+/).length} Words Total` : '0 Words'}
                     </span>
                   </div>
                 </div>
@@ -372,92 +429,109 @@ export const AnalyzeVideo = () => {
             </Card>
 
             {/* Real Transcript Display Box */}
-            <Card padding="lg" className="border-slate-800 bg-dark-800/90 shadow-2xl space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-brand-indigo/10 border border-brand-indigo/20 flex items-center justify-center text-brand-lightViolet">
-                    <ListFilter className="w-5 h-5" />
+            {resultData.transcript ? (
+              <Card padding="lg" className="border-slate-800 bg-dark-800/90 shadow-2xl space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-brand-indigo/10 border border-brand-indigo/20 flex items-center justify-center text-brand-lightViolet">
+                      <ListFilter className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-bold font-heading text-white">
+                        Retrieved Video Transcript
+                      </h4>
+                      <p className="text-xs text-text-muted">
+                        Preserved timestamps `[start]` & `duration` ready for interactive learning
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 className="text-base font-bold font-heading text-white">
-                      Retrieved Video Transcript
-                    </h4>
-                    <p className="text-xs text-text-muted">
-                      Preserved timestamps `[start]` & `duration` ready for interactive learning
-                    </p>
+
+                  {/* View Switcher Tabs */}
+                  <div className="flex items-center bg-dark-900 p-1 rounded-xl border border-slate-800">
+                    <button
+                      onClick={() => setActiveViewTab('segments')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        activeViewTab === 'segments'
+                          ? 'bg-brand-indigo text-white shadow-md'
+                          : 'text-text-muted hover:text-white'
+                      }`}
+                    >
+                      Timestamped Segments ({resultData.transcript.segments.length})
+                    </button>
+                    <button
+                      onClick={() => setActiveViewTab('fullText')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                        activeViewTab === 'fullText'
+                          ? 'bg-brand-indigo text-white shadow-md'
+                          : 'text-text-muted hover:text-white'
+                      }`}
+                    >
+                      Full Text
+                    </button>
                   </div>
                 </div>
 
-                {/* View Switcher Tabs */}
-                <div className="flex items-center bg-dark-900 p-1 rounded-xl border border-slate-800">
-                  <button
-                    onClick={() => setActiveViewTab('segments')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                      activeViewTab === 'segments'
-                        ? 'bg-brand-indigo text-white shadow-md'
-                        : 'text-text-muted hover:text-white'
-                    }`}
-                  >
-                    Timestamped Segments ({resultData.transcript.segments.length})
-                  </button>
-                  <button
-                    onClick={() => setActiveViewTab('fullText')}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                      activeViewTab === 'fullText'
-                        ? 'bg-brand-indigo text-white shadow-md'
-                        : 'text-text-muted hover:text-white'
-                    }`}
-                  >
-                    Full Text
-                  </button>
-                </div>
-              </div>
+                {activeViewTab === 'segments' ? (
+                  <div className="space-y-3">
+                    {/* Search input */}
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-dark-900 border border-slate-800 focus-within:border-brand-indigo transition-colors">
+                      <Search className="w-4 h-4 text-text-muted shrink-0" />
+                      <input
+                        type="text"
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        placeholder="Search within transcript segments..."
+                        className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
+                      />
+                    </div>
 
-              {activeViewTab === 'segments' ? (
-                <div className="space-y-3">
-                  {/* Search input */}
-                  <div className="flex items-center gap-2 p-2.5 rounded-xl bg-dark-900 border border-slate-800 focus-within:border-brand-indigo transition-colors">
-                    <Search className="w-4 h-4 text-text-muted shrink-0" />
-                    <input
-                      type="text"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      placeholder="Search within transcript segments..."
-                      className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
-                    />
-                  </div>
-
-                  <div className="max-h-96 overflow-y-auto space-y-2 pr-2 scrollbar-thin scrollbar-thumb-slate-700">
-                    {filteredSegments.length > 0 ? (
-                      filteredSegments.map((seg, idx) => (
-                        <div
-                          key={idx}
-                          className="p-3 rounded-xl bg-dark-900/80 border border-slate-800/80 hover:border-slate-700 flex items-start gap-3 transition-colors text-xs"
-                        >
-                          <span className="px-2 py-1 rounded bg-brand-indigo/15 text-brand-lightViolet border border-brand-indigo/30 font-mono font-bold shrink-0">
-                            {formatTimestamp(seg.start)}
-                          </span>
-                          <div className="flex-1 text-text-secondary leading-relaxed pt-0.5">
-                            {seg.text}
+                    <div className="max-h-96 overflow-y-auto space-y-2 pr-2 scrollbar-thin scrollbar-thumb-slate-700">
+                      {filteredSegments.length > 0 ? (
+                        filteredSegments.map((seg, idx) => (
+                          <div
+                            key={idx}
+                            className="p-3 rounded-xl bg-dark-900/80 border border-slate-800/80 hover:border-slate-700 flex items-start gap-3 transition-colors text-xs"
+                          >
+                            <span className="px-2 py-1 rounded bg-brand-indigo/15 text-brand-lightViolet border border-brand-indigo/30 font-mono font-bold shrink-0">
+                              {formatTimestamp(seg.start)}
+                            </span>
+                            <div className="flex-1 text-text-secondary leading-relaxed pt-0.5">
+                              {seg.text}
+                            </div>
+                            <span className="text-[10px] text-text-muted font-mono shrink-0 pt-1">
+                              +{seg.duration}s
+                            </span>
                           </div>
-                          <span className="text-[10px] text-text-muted font-mono shrink-0 pt-1">
-                            +{seg.duration}s
-                          </span>
+                        ))
+                      ) : (
+                        <div className="p-8 text-center text-xs text-text-muted">
+                          No segments matched your search term.
                         </div>
-                      ))
-                    ) : (
-                      <div className="p-8 text-center text-xs text-text-muted">
-                        No segments matched your search term.
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div className="max-h-96 overflow-y-auto p-4 rounded-xl bg-dark-900/90 border border-slate-800 text-xs text-text-secondary leading-relaxed font-sans whitespace-pre-wrap">
-                  {resultData.transcript.fullText}
-                </div>
-              )}
-            </Card>
+                ) : (
+                  <div className="max-h-96 overflow-y-auto p-4 rounded-xl bg-dark-900/90 border border-slate-800 text-xs text-text-secondary leading-relaxed font-sans whitespace-pre-wrap">
+                    {resultData.transcript.fullText}
+                  </div>
+                )}
+              </Card>
+            ) : (
+              <Card padding="lg" className="border-amber-500/30 bg-amber-500/5 text-amber-300 space-y-3 text-center">
+                <p className="text-sm font-semibold">
+                  Transcript could not be loaded automatically.
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleRetryTranscript}
+                  leftIcon={<RefreshCw className="w-4 h-4" />}
+                  className="mx-auto border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                >
+                  Retry Transcript Retrieval
+                </Button>
+              </Card>
+            )}
           </motion.div>
         )}
       </div>
