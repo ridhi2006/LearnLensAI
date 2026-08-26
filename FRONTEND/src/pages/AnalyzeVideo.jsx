@@ -299,7 +299,7 @@ export const AnalyzeVideo = () => {
             </div>
             <div className="space-y-2">
               <h3 className="text-xl font-bold font-heading text-white">
-                Member 1 Processing Pipeline
+                Video Processing Pipeline
               </h3>
               <p className="text-sm text-brand-lightViolet font-medium animate-pulse">
                 {loadingStep}
@@ -311,7 +311,7 @@ export const AnalyzeVideo = () => {
           </Card>
         )}
 
-        {/* Real Member 1 Result Display */}
+        {/* Real Result Display */}
         {resultData && !isAnalyzing && (
           <motion.div initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
             {/* Real Video Metadata Header */}
@@ -380,10 +380,10 @@ export const AnalyzeVideo = () => {
                   </div>
                   <div>
                     <h4 className="text-base font-bold font-heading text-white">
-                      Retrieved Member 1 Transcript
+                      Retrieved Video Transcript
                     </h4>
                     <p className="text-xs text-text-muted">
-                      Preserved timestamps `[start]` & `duration` ready for Member 2 & 3
+                      Preserved timestamps `[start]` & `duration` ready for interactive learning
                     </p>
                   </div>
                 </div>
