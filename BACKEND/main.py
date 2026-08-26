@@ -11,6 +11,8 @@ from youtube_transcript_api import (
     VideoUnavailable,
     VideoUnplayable,
     YouTubeRequestFailed,
+    IpBlocked,
+    RequestBlocked,
 )
 
 app = FastAPI(title="LearnLensAI Backend", version="1.0.0")
@@ -234,6 +236,11 @@ def fetch_youtube_transcript(video_id: str, target_lang: str = "en") -> dict:
         }
     except HTTPException:
         raise
+    except (IpBlocked, RequestBlocked):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="YouTube transcript requests are temporarily rate-limited. Please try again in a few moments."
+        )
     except (TranscriptsDisabled, NoTranscriptFound):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -302,6 +309,11 @@ def get_transcript_languages(video_id: str):
         return LanguagesResponse(languages=lang_list)
     except HTTPException:
         raise
+    except (IpBlocked, RequestBlocked):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="YouTube transcript requests are temporarily rate-limited. Please try again in a few moments."
+        )
     except (TranscriptsDisabled, NoTranscriptFound):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
