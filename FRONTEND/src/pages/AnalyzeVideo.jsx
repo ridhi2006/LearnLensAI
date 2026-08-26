@@ -105,11 +105,20 @@ export const AnalyzeVideo = () => {
   };
 
   const parseErrorMessage = (err) => {
+    if (err?.response?.status === 429 || err?.response?.data?.code === 'YOUTUBE_RATE_LIMITED') {
+      const retryAfter = err?.response?.data?.retryAfter || 30;
+      return `YouTube transcript requests are temporarily rate-limited. Please try again in about ${retryAfter} seconds.`;
+    }
     if (err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
       return 'Transcript retrieval timed out. Please try again.';
     }
     if (err?.response?.data?.detail) {
-      return err.response.data.detail;
+      if (typeof err.response.data.detail === 'string') {
+        return err.response.data.detail;
+      }
+      if (err.response.data.detail?.detail) {
+        return err.response.data.detail.detail;
+      }
     }
     if (err?.response?.status === 504 || err?.response?.status === 408) {
       return 'Transcript retrieval timed out. Please try again.';
@@ -125,6 +134,7 @@ export const AnalyzeVideo = () => {
 
   const handleStartAnalysis = async (e) => {
     if (e) e.preventDefault();
+    if (isAnalyzing) return;
     setErrorMsg(null);
 
     const videoId = extractVideoId(url);
@@ -211,7 +221,7 @@ export const AnalyzeVideo = () => {
   };
 
   const handleFetchLanguage = async (newLang) => {
-    if (!resultData?.video) return;
+    if (!resultData?.video || isAnalyzing) return;
     setSelectedLanguage(newLang);
 
     // CRITICAL BUG FIX: Clear transcript immediately when changing language so stale transcript is NEVER displayed underneath!
@@ -253,7 +263,7 @@ export const AnalyzeVideo = () => {
   };
 
   const handleRetryTranscript = async () => {
-    if (!resultData?.video) return;
+    if (!resultData?.video || isAnalyzing) return;
     handleFetchLanguage(selectedLanguage);
   };
 

@@ -284,6 +284,20 @@ class TestTranscriptLanguages(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["videoId"], "MFhxShGxHWc")
 
+    @patch('main.YouTubeTranscriptApi')
+    def test_transcript_rate_limit_429(self, mock_api_cls):
+        from youtube_transcript_api import IpBlocked
+        mock_api_inst = MagicMock()
+        mock_api_inst.list.side_effect = IpBlocked("MFhxShGxHWc")
+        mock_api_cls.return_value = mock_api_inst
+
+        res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
+        self.assertEqual(res.status_code, 429)
+        data = res.json()
+        self.assertEqual(data["code"], "YOUTUBE_RATE_LIMITED")
+        self.assertEqual(data["retryAfter"], 30)
+        self.assertEqual(res.headers.get("retry-after"), "30")
+
 if __name__ == '__main__':
     unittest.main()
 
