@@ -118,6 +118,12 @@ class TestPhase2VideoInfo(unittest.TestCase):
         self.assertEqual(res.json()["detail"], "YouTube request timed out while fetching video details.")
 
 class TestTranscriptLanguages(unittest.TestCase):
+    def setUp(self):
+        from main import cooldown_mgr, transcript_cache, languages_cache
+        cooldown_mgr.cooldown_until = 0
+        transcript_cache.clear()
+        languages_cache.clear()
+
     @patch('main.YouTubeTranscriptApi')
     def test_languages_endpoint_success(self, mock_api_cls):
         mock_api_inst = MagicMock()
@@ -160,8 +166,8 @@ class TestTranscriptLanguages(unittest.TestCase):
         res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data["language"], "en")
-        self.assertEqual(data["languageName"], "English")
+        self.assertEqual(data["languageCode"], "en")
+        self.assertEqual(data["language"], "English")
         self.assertEqual(len(data["segments"]), 1)
 
     @patch('main.YouTubeTranscriptApi')
@@ -190,8 +196,8 @@ class TestTranscriptLanguages(unittest.TestCase):
         res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "hi"})
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data["language"], "hi")
-        self.assertEqual(data["languageName"], "Hindi")
+        self.assertEqual(data["languageCode"], "hi")
+        self.assertEqual(data["language"], "Hindi")
 
     @patch('main.YouTubeTranscriptApi')
     def test_transcript_spanish_success(self, mock_api_cls):
@@ -210,8 +216,8 @@ class TestTranscriptLanguages(unittest.TestCase):
         res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "es"})
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data["language"], "es")
-        self.assertEqual(data["languageName"], "Spanish")
+        self.assertEqual(data["languageCode"], "es")
+        self.assertEqual(data["language"], "Spanish")
 
     @patch('main.YouTubeTranscriptApi')
     def test_requested_language_unavailable(self, mock_api_cls):
@@ -243,7 +249,7 @@ class TestTranscriptLanguages(unittest.TestCase):
         res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "auto"})
         self.assertEqual(res.status_code, 200)
         data = res.json()
-        self.assertEqual(data["language"], "fr")
+        self.assertEqual(data["languageCode"], "fr")
 
     @patch('main.YouTubeTranscriptApi')
     def test_no_transcript_available(self, mock_api_cls):
@@ -285,18 +291,65 @@ class TestTranscriptLanguages(unittest.TestCase):
         self.assertEqual(res.json()["videoId"], "MFhxShGxHWc")
 
     @patch('main.YouTubeTranscriptApi')
+    def test_language_discovery_endpoint(self, mock_api_cls):
+        from main import languages_cache
+        languages_cache.clear()
+        mock_api_inst = MagicMock()
+        mock_t = MagicMock()
+        mock_t.language_code = 'en'
+        mock_t.language = 'English'
+        mock_t.is_generated = True
+        mock_api_inst.list.return_value = [mock_t]
+        mock_api_cls.return_value = mock_api_inst
+
+        res = client.get("/api/v1/transcript-languages/MFhxShGxHWc")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["videoId"], "MFhxShGxHWc")
+        self.assertTrue(any(l["code"] == "en" for l in data["languages"]))
+
+    @patch('main.YouTubeTranscriptApi')
     def test_transcript_rate_limit_429(self, mock_api_cls):
         from youtube_transcript_api import IpBlocked
-        mock_api_inst = MagicMock()
-        mock_api_inst.list.side_effect = IpBlocked("MFhxShGxHWc")
-        mock_api_cls.return_value = mock_api_inst
+        from main import cooldown_mgr
+        cooldown_mgr.trigger(30)
 
         res = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
         self.assertEqual(res.status_code, 429)
         data = res.json()
-        self.assertEqual(data["code"], "YOUTUBE_RATE_LIMITED")
-        self.assertEqual(data["retryAfter"], 30)
-        self.assertEqual(res.headers.get("retry-after"), "30")
+        self.assertIn("detail", data)
+        detail = data["detail"]
+        self.assertEqual(detail["code"], "YOUTUBE_RATE_LIMITED")
+        self.assertTrue("retryAfter" in detail)
+        self.assertEqual(res.headers.get("retry-after"), str(detail["retryAfter"]))
+
+    @patch('main.YouTubeTranscriptApi')
+    def test_server_side_caching(self, mock_api_cls):
+        from main import transcript_cache, cooldown_mgr
+        cooldown_mgr.cooldown_until = 0
+        transcript_cache.clear()
+
+        mock_api_inst = MagicMock()
+        mock_t = MagicMock()
+        mock_t.language_code = 'en'
+        mock_snippet = MagicMock()
+        mock_snippet.text = "Cached text"
+        mock_snippet.start = 0.0
+        mock_snippet.duration = 1.0
+        mock_t.fetch.return_value = [mock_snippet]
+        mock_api_inst.list.return_value = [mock_t]
+        mock_api_cls.return_value = mock_api_inst
+
+        # First call -> hits mock API
+        res1 = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(mock_api_inst.list.call_count, 1)
+
+        # Second call -> uses cache, call count remains 1
+        res2 = client.post("/api/v1/transcript", json={"url": "https://www.youtube.com/watch?v=MFhxShGxHWc", "language": "en"})
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(mock_api_inst.list.call_count, 1)
+        self.assertEqual(res2.json()["fullText"], "Cached text")
 
 if __name__ == '__main__':
     unittest.main()

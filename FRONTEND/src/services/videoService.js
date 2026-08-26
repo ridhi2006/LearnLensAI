@@ -33,6 +33,13 @@ export const videoService = {
     return MOCK_VIDEOS[videoId] || MOCK_VIDEOS[DEFAULT_VIDEO_ID];
   },
 
+  // Fetch available transcript languages discovery from backend (Cached)
+  async getTranscriptLanguagesDiscovery(videoId) {
+    if (!videoId) return { videoId: '', languages: [] };
+    const cleanId = extractVideoId(videoId) || videoId;
+    return await api.get(`/transcript-languages/${cleanId}`, { timeout: 20000 });
+  },
+
   // Fetch available transcript languages from backend (Cached)
   async getAvailableLanguages(videoId) {
     if (!videoId) return { languages: [] };

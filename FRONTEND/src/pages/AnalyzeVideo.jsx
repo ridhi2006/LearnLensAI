@@ -96,6 +96,23 @@ export const AnalyzeVideo = () => {
     }
   ];
 
+  const [cooldownSeconds, setCooldownSeconds] = useState(0);
+
+  // Live 1-second countdown for rate-limit cooldown (Req 10)
+  React.useEffect(() => {
+    if (cooldownSeconds <= 0) return;
+    const timer = setInterval(() => {
+      setCooldownSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldownSeconds]);
+
   // Format seconds into MM:SS timestamp display
   const formatTimestamp = (seconds) => {
     if (typeof seconds !== 'number' || isNaN(seconds)) return '00:00';
@@ -105,19 +122,21 @@ export const AnalyzeVideo = () => {
   };
 
   const parseErrorMessage = (err) => {
-    if (err?.response?.status === 429 || err?.response?.data?.code === 'YOUTUBE_RATE_LIMITED') {
-      const retryAfter = err?.response?.data?.retryAfter || 30;
-      return `YouTube transcript requests are temporarily rate-limited. Please try again in about ${retryAfter} seconds.`;
+    const detailObj = err?.response?.data?.detail;
+    if (err?.response?.status === 429 || detailObj?.code === 'YOUTUBE_RATE_LIMITED' || err?.response?.data?.code === 'YOUTUBE_RATE_LIMITED') {
+      const retryAfter = detailObj?.retryAfter || err?.response?.data?.retryAfter || 30;
+      setCooldownSeconds(retryAfter);
+      return `Transcript service is temporarily rate-limited by YouTube. Please wait ${retryAfter} seconds before trying again.`;
     }
     if (err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
       return 'Transcript retrieval timed out. Please try again.';
     }
-    if (err?.response?.data?.detail) {
-      if (typeof err.response.data.detail === 'string') {
-        return err.response.data.detail;
+    if (detailObj) {
+      if (typeof detailObj === 'string') {
+        return detailObj;
       }
-      if (err.response.data.detail?.detail) {
-        return err.response.data.detail.detail;
+      if (detailObj?.message) {
+        return detailObj.message;
       }
     }
     if (err?.response?.status === 504 || err?.response?.status === 408) {
@@ -134,7 +153,7 @@ export const AnalyzeVideo = () => {
 
   const handleStartAnalysis = async (e) => {
     if (e) e.preventDefault();
-    if (isAnalyzing) return;
+    if (isAnalyzing || cooldownSeconds > 0) return;
     setErrorMsg(null);
 
     const videoId = extractVideoId(url);
@@ -194,8 +213,8 @@ export const AnalyzeVideo = () => {
         setActiveVideoId(videoInfo.videoId);
         setResultData(completeOutput);
 
-        if (transcriptData.language) {
-          setSelectedLanguage(transcriptData.language);
+        if (transcriptData.languageCode || transcriptData.language) {
+          setSelectedLanguage(transcriptData.languageCode || transcriptData.language);
         }
 
         showToast({
@@ -221,7 +240,7 @@ export const AnalyzeVideo = () => {
   };
 
   const handleFetchLanguage = async (newLang) => {
-    if (!resultData?.video || isAnalyzing) return;
+    if (!resultData?.video || isAnalyzing || cooldownSeconds > 0) return;
     setSelectedLanguage(newLang);
 
     // CRITICAL BUG FIX: Clear transcript immediately when changing language so stale transcript is NEVER displayed underneath!
@@ -242,8 +261,8 @@ export const AnalyzeVideo = () => {
       setActiveVideoId(resultData.video.videoId);
       setResultData(completeOutput);
 
-      if (transcriptData.language) {
-        setSelectedLanguage(transcriptData.language);
+      if (transcriptData.languageCode || transcriptData.language) {
+        setSelectedLanguage(transcriptData.languageCode || transcriptData.language);
       }
 
       showToast({
@@ -263,7 +282,7 @@ export const AnalyzeVideo = () => {
   };
 
   const handleRetryTranscript = async () => {
-    if (!resultData?.video || isAnalyzing) return;
+    if (!resultData?.video || isAnalyzing || cooldownSeconds > 0) return;
     handleFetchLanguage(selectedLanguage);
   };
 
@@ -675,11 +694,11 @@ export const AnalyzeVideo = () => {
                     variant="outline"
                     size="sm"
                     onClick={handleRetryTranscript}
-                    disabled={isAnalyzing}
-                    leftIcon={<RefreshCw className="w-4 h-4" />}
-                    className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                    disabled={isAnalyzing || cooldownSeconds > 0}
+                    leftIcon={<RefreshCw className={`w-4 h-4 ${isAnalyzing ? 'animate-spin' : ''}`} />}
+                    className="border-amber-500/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
                   >
-                    Retrieve Transcript
+                    {cooldownSeconds > 0 ? `Try again in ${cooldownSeconds}s` : 'Retrieve Transcript'}
                   </Button>
                 </div>
               </Card>
